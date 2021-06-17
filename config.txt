@@ -1,0 +1,6 @@
+Numero_Thread;
+Storage_Dimension;
+Capacità_Bytes;
+RequestQueueLenght;
+Abstime.tv_sec;
+Abstime.tv_nsec;

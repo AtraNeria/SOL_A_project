@@ -1,6 +1,9 @@
 #ifndef _API_H
 #define _API_H
 
+#include <stddef.h>
+#include <time.h>
+
     /*  Apre connessione AF_UNIX al socket file sockname.
         La richiesta viene ripetuta dopo msec millisecondi a fino allo scadere di abstime.
         Ritorna 0 in caso di successo, -1 in caso di fallimento e setta errno opportunamente.

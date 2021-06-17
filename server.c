@@ -11,9 +11,13 @@
 
 void errEx();
 void init(int index, char * string);
-void readConfig();
-void startServer();
-void manageRequest(void * buffer);
+
+
+int threadQuantity;
+int storageDim;
+int capacity;
+int queueLenght;
+
 
 void errEx(){
     perror("Error:");
@@ -21,29 +25,24 @@ void errEx(){
 }
 
 void init(int index, char * string){
+
     switch (index)
     {
     case 0:                                     //prima riga di config.txt
-        extern int ThreadQuantity=atoi(string);
+        threadQuantity=atoi(string);
         break;
     
     case 1:                                    //seconda riga di config.txt ....
-        extern int StorageDim=atoi(string);
+        storageDim=atoi(string);
         break;
     
     case 2:
-        extern int capacity=atoi(string);
+        capacity=atoi(string);
         break;
 
     case 3:
-        extern int queueLenght=atoi(string);
-
-    //case 4:
-    //    extern const struct timespec abstime;
-    //    abstime.tv_sec=(time_t)atol(string);      ?????????
-
-    //case 5:
-    //    abstime.tv_nsec=atol(string);
+        queueLenght=atoi(string);
+        break;
 
     default:
         break;
@@ -83,17 +82,17 @@ void startServer(){
 
     //int queueLenght;    //specificata in config.txt
     int newSocket;
-    
+    int stop=0;
 
-    while(true){
+    while(!stop) {
         if((listen(serverSFD, queueLenght))==-1)
             errEx();
         if((newSocket=accept(serverSFD, (struct sockaddr *)&address, (socklen_t*)&address))==-1)
             errEx();
-
-        extern void * buffer;
+        printf("OK\n");
+        /*extern void * buffer;
         read(newSocket, buffer, LEN);   //nel buffer salvo la richiesta fatta dal client
-        manageRequest(buffer);
+        manageRequest(buffer);*/
     }
 
 }

@@ -1,8 +1,8 @@
-
+#include "server.h"
 
 int main(){
-    extern readConfig();
-    extern startServer();
-    extern shutDownServer();
+    readConfig();
+    startServer();
+    //shutDownServer(); TO DO
     return 0;
 }

@@ -1,11 +1,6 @@
 #ifndef _SERVER_H
 #define _SERVER_H
 
-    /*  In caso di fallimento nel gestire una richiesta 
-        mostra messaggio di errore e chiude il processo.
-    */
-void errEx();
-
     /*  Legge il file config.txt dove è specificata la
         configurazione di avvio del server.
     */

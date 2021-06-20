@@ -5,10 +5,12 @@
 #include <netinet/in.h>
 #include <string.h>
 #include <errno.h>
+#include <poll.h>
 #include "server.h"
 
 #define LEN 2048
 #define CONF_PAR 10
+#define MAX_CONN 30
 
 typedef struct node {
     int descriptor;
@@ -20,11 +22,16 @@ void errEx ();
 void init (int index, char * string);
 void cleanup(pthread_t * workers[], int index, node * socket_list);
 node * addNode(int desc);
+node * deleteNode(node * List);
 
 int threadQuantity;
 int storageDim;
 int capacity;
 int queueLenght;
+int maxClients;
+node * requestsQueue=NULL;
+node * lastRequest;
+pthread_mutex_t mutex;
 
 
 void errEx () {
@@ -51,6 +58,13 @@ void init (int index, char * string) {
     case 3:
         queueLenght=atoi(string);
         break;
+    
+    case 4:
+        maxClients=atoi(string);
+        if (maxClients>MAX_CONN) {
+            printf("Numero client richiesti troppo alto, impossibile configurare il server");
+            exit(EXIT_FAILURE);
+        }
 
     default:
         break;
@@ -90,7 +104,6 @@ void startServer () {
         errEx();
 
 
-    int newSocket;
     int stop=0;
     pthread_t workers [threadQuantity];
 
@@ -102,26 +115,65 @@ void startServer () {
         exit(EXIT_FAILURE);
     }
 
+
+    if ((listen(serverSFD, queueLenght))==-1)
+        errEx();
+
+    struct pollfd connectionFDS [maxClients];
+    connectionFDS[0].fd = serverSFD;
+    connectionFDS[0].events = POLLIN;
+    for (int i=1; i < maxClients; i++) { 
+        connectionFDS[i].fd = -1;
+        connectionFDS[i].events = POLLIN; 
+    }
+    int pollRes;
+    int timeout = 60*1000;      //1 min
+
+
     while(!stop) {
-        if((listen(serverSFD, queueLenght))==-1)
+
+        if ((pollRes=poll(connectionFDS,maxClients,timeout))==-1) 
             errEx();
-        if((newSocket=accept(serverSFD, (struct sockaddr *)&address, (socklen_t*)&address))==-1)
-            errEx();
-        currSock->next=addNode(newSocket);
-        currSock = currSock->next;
-        /*extern void * buffer;
-        read(newSocket, buffer, LEN);   //nel buffer salvo la richiesta fatta dal client
-        manageRequest(buffer);*/
+        if (pollRes==0) {
+            printf("Timed out without connections\n");
+            //no clients connected, close server
+        }
+
+
+        if (connectionFDS[0].revents == POLLIN) {   //if client richiede connect
+
+            int j = 1;
+            while(connectionFDS[j].fd!=-1 && j<maxClients) j++; //controllo se ho spazio per gestire più client
+
+            if (j<=maxClients) { 
+                connectionFDS[j].fd = accept (serverSFD, NULL, 0);  //se posso accetto connessione
+                currSock->next=addNode(connectionFDS[j].fd);        // per eventuale cleanup
+                currSock = currSock->next;
+            }
+            else printf ("Tentata connessione\n");      //se non posso stampo un avvertimento
+            
+        }
+
+        for (int i=1;i<maxClients;i++){
+            if (connectionFDS[i].revents==POLLIN) 
+                if (requestsQueue == NULL) { 
+                    requestsQueue == addNode(connectionFDS[i].fd);
+                    lastRequest = requestsQueue;
+                }
+                else { lastRequest->next = addNode(connectionFDS[i].fd);
+                    lastRequest=lastRequest->next;
+                }
+        }
     }
 
 }
 
 void cleanup(pthread_t * workers[], int index, node * socket_list) {
-    for (int i=0; i<index; i++) {
+    for (int i=0; i<index; i++) {       //join dei thread aperti
         pthread_join(workers[i], NULL);
     }
     node * toFree;
-    while (socket_list != NULL) {
+    while (socket_list != NULL) {       //chiusura sockets
         if (close(socket_list->descriptor)!=0)
             errEx();
         toFree = socket_list;
@@ -143,18 +195,33 @@ int createWorkers (pthread_t * workers[]) {
 }
 
 node * addNode (int desc) {
-    node * sockList = malloc(sizeof(node));
-    sockList->descriptor = desc;
-    sockList->next =NULL;
-    return sockList;
+    node * List = malloc(sizeof(node));
+    List->descriptor = desc;
+    List->next =NULL;
+    return List;
+}
+
+node * deleteNode(node * List){
+    node * toDelete =  List;
+    List=List->next;
+    free(toDelete);
+    return List;
 }
 
 
-/*void manageRequest(void * buffer) {
-    
-    if (strcmp(buffer,"print")) {
-        printf ("OK\n" );
-    }
-    
+void manageRequest() {
 
-} */
+    int currentRequest;     //richiesta che il thread sta servendo
+    while() {               //finchè accetto nuove richieste
+        pthread_mutex_lock(&mutex);
+        currentRequest = requestsQueue->descriptor;
+        deleteNode(requestsQueue);
+        pthread_mutex_unlock(&mutex);
+
+        ssize_t reqRes;
+        void * buffer;
+        if ((reqRes=read(currentRequest, buffer, 2048))==-1)
+            errEx();
+    }
+
+}

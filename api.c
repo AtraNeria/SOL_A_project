@@ -7,6 +7,8 @@
 #include <errno.h>
 
 #define MAX_LEN 108
+#define O_CREATE 01
+#define O_LOCK 10
 
 int clientSFD;
 
@@ -43,7 +45,6 @@ int openConnection(const char* sockname, int msec, const struct timespec abstime
 
 }
 
-
 int closeConnection(const char* sockname) {
     int res;
     if ( (res = close(clientSFD)) == -1 ) {
@@ -53,3 +54,25 @@ int closeConnection(const char* sockname) {
     return res;
 }
 
+int openFile(const char* pathname, int flags){
+
+    if ( flags != NULL) {
+        switch (flags){
+
+            case O_CREATE:
+                //if (write(clientSFD,)!=)
+                break;
+
+            case O_LOCK:
+                break;
+
+            case O_CREATE | O_LOCK : 
+                break;
+
+            default:
+                fprintf(stderr,"Flags non valide\n");
+                break;
+            }
+    }
+    
+}

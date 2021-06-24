@@ -17,10 +17,10 @@ void startServer();
     /*  Crea un numero di thread workers come specificato in config.txt
         Ritorna -1 se ha successo, il numero di indice del worker che ha fallito a creare altrimenti
     */
-int createWorkers (pthread_t * workers[]);
+int createWorkers (pthread_t workers[]);
 
     /*  Gestisce le richieste dei client con politica FIFO
     */
-void manageRequest();
+void * manageRequest();
 
 #endif

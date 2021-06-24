@@ -6,32 +6,38 @@
 #include <string.h>
 #include <errno.h>
 #include <poll.h>
+#include <pthread.h>
 #include "server.h"
+#include "commProtocol.h"
+#include "list.h"
 
-#define LEN 2048
 #define CONF_PAR 10
 #define MAX_CONN 30
+#define TRUE 1
 
-typedef struct node {
-    int descriptor;
-    node * next;
-} node;
 
 
 void errEx ();
 void init (int index, char * string);
-void cleanup(pthread_t * workers[], int index, node * socket_list);
-node * addNode(int desc);
-node * deleteNode(node * List);
+void cleanup(pthread_t workers[], int index, node * socket_list);
+
+//inizializza lo storage all'arrivo del primo file; ne ritorna il puntatore
+fileNode * initStorage(FILE * f, char * fname, int fOwner);
+
 
 int threadQuantity;
 int storageDim;
 int capacity;
 int queueLenght;
 int maxClients;
+
 node * requestsQueue=NULL;
 node * lastRequest;
 pthread_mutex_t mutex;
+
+int fileCount=0;
+fileNode * storage=NULL;
+fileNode * lastAddedFile=NULL;
 
 
 void errEx () {
@@ -71,17 +77,16 @@ void init (int index, char * string) {
     }
 }
 
-
 void readConfig () {
     FILE * conf;
     if( (conf=fopen("config.txt","r")) == NULL) //apro file di config
         errEx();
-    char confStr [LEN];
+    char confStr [MAX_NAME_LEN];
     char * currTok;
     int i;
 
     for (i=0;i<CONF_PAR;i++){
-        fgets(confStr, LEN, conf);
+        fgets(confStr, MAX_NAME_LEN, conf);
         currTok=strtok(confStr, ";");
         init(i, currTok);
     }
@@ -104,14 +109,13 @@ void startServer () {
         errEx();
 
 
-    int stop=0;
     pthread_t workers [threadQuantity];
 
     int wsFailed;
-    if ((wsFailed=createWorkers(&workers)) !=-1) {
+    if ((wsFailed=createWorkers(workers)) !=-1) {
         printf ("Problema riscontrato nella creazione dei thread\n");
         perror("Error:");
-        cleanup(&workers, wsFailed, socketsList);
+        cleanup(workers, wsFailed, socketsList);
         exit(EXIT_FAILURE);
     }
 
@@ -130,13 +134,13 @@ void startServer () {
     int timeout = 60*1000;      //1 min
 
 
-    while(!stop) {
+    while(TRUE) {
 
         if ((pollRes=poll(connectionFDS,maxClients,timeout))==-1) 
             errEx();
         if (pollRes==0) {
-            printf("Timed out without connections\n");
-            //no clients connected, close server
+            printf("Sessione scaduta\n");
+            //no clients connected atm
         }
 
 
@@ -155,23 +159,25 @@ void startServer () {
         }
 
         for (int i=1;i<maxClients;i++){
-            if (connectionFDS[i].revents==POLLIN) 
+            if (connectionFDS[i].revents==POLLIN) {
                 if (requestsQueue == NULL) { 
-                    requestsQueue == addNode(connectionFDS[i].fd);
+                    requestsQueue = addNode(connectionFDS[i].fd);
                     lastRequest = requestsQueue;
                 }
                 else { lastRequest->next = addNode(connectionFDS[i].fd);
                     lastRequest=lastRequest->next;
                 }
+            }
         }
     }
 
 }
 
-void cleanup(pthread_t * workers[], int index, node * socket_list) {
+void cleanup(pthread_t workers[], int index, node * socket_list) {
     for (int i=0; i<index; i++) {       //join dei thread aperti
         pthread_join(workers[i], NULL);
     }
+
     node * toFree;
     while (socket_list != NULL) {       //chiusura sockets
         if (close(socket_list->descriptor)!=0)
@@ -180,9 +186,14 @@ void cleanup(pthread_t * workers[], int index, node * socket_list) {
         socket_list = socket_list->next;
         free(toFree);
     }
+
+    while (storage!=NULL) {         //chiusura e free file rimasti
+       deleteFile(storage, &storage, &lastAddedFile, &fileCount);
+    }
+    
 }
 
-int createWorkers (pthread_t * workers[]) {
+int createWorkers (pthread_t  workers[]) {
 
     int error_num;
     for (int i=0; i<threadQuantity; i++) {
@@ -194,34 +205,34 @@ int createWorkers (pthread_t * workers[]) {
     return 0;
 }
 
-node * addNode (int desc) {
-    node * List = malloc(sizeof(node));
-    List->descriptor = desc;
-    List->next =NULL;
-    return List;
+fileNode * initStorage(FILE * f, char * fname, int fOwner){
+    fileNode * list = malloc(sizeof(fileNode));
+    list->owner=fOwner;
+    list->next=NULL;
+    list->prev=NULL;
+    list->fPointer=f;
+    strcpy(list->fileName,fname);
+    lastAddedFile=list;
+    return list;
+
 }
 
-node * deleteNode(node * List){
-    node * toDelete =  List;
-    List=List->next;
-    free(toDelete);
-    return List;
-}
-
-
-void manageRequest() {
+void * manageRequest() {
 
     int currentRequest;     //richiesta che il thread sta servendo
-    while() {               //finchè accetto nuove richieste
+    while(TRUE) {               //finchè accetto nuove richieste
         pthread_mutex_lock(&mutex);
         currentRequest = requestsQueue->descriptor;
         deleteNode(requestsQueue);
         pthread_mutex_unlock(&mutex);
 
         ssize_t reqRes;
-        void * buffer;
+        void * buffer=NULL;
         if ((reqRes=read(currentRequest, buffer, 2048))==-1)
             errEx();
+        //formato richiesta: codice operazione, nomeFile
+        //da parsare e fare dispatching tramite switch
     }
 
 }
+

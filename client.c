@@ -15,28 +15,43 @@
 
 #define CONN_CLOSED 3
 #define T_REPEAT 4
-#define NO_ARG 5
-#define INVALID_OPT 6
+#define F_REPEAT 5
+#define NO_ARG 6
+#define INVALID_OPT 7
 
-void printOpt();        // Processo per stampare a schermo le opzioni supportate
-void timeCheck (int argc, char ** argv);    // Funzione per controllare se è stato passato msec con l'opione -t;
-                                            //  ritorna il valore del tempo se trovato, 0 altrimenti
+// Stampa a schermo le opzioni supportate
+void printOpt();
+
+/* Controlla se è stato passato msec con l'opione -t;
+ ritorna il valore del tempo se trovato, 0 altrimenti */
+void timeCheck (int argc, char ** argv);
+
+/* Prende come argomento il codice warno,
+ stampa a schermo il warning corrispondente */
 void printWarning(int warno);
+
+/* Chiama perror e chiude il processo */
 void errEx ();
+
+/* Dealloca eventuali buffer prima di chiudere */
+void cleanup();
+
+/* Naviga la cartella data fino a n file in modo ricorsivo, 
+tenendo il conto dei file già visitati in j*/
 void navigateDir(char * dirName, int n, int j);
 
 
 int msec = 0;
 int tOpt_met = 0;
 int pOpt_met = 0;
-char * sockname;
+char * sockName = NULL;
 char * dirReadFiles=NULL;
 char * expelledFiles=NULL;
 
 
 int main (int argc, char ** argv){
 
-    const char * optstring = "hf:w:W:D:r:R::d:t:l:u:c:p";
+    const char * optstring = "hf:w:W:D:r:R::d:t:l:u:c:p";   //Opzioni supportate
     int curr_opt;
     int fOpt_met = 0;
     int connOpen = 0;
@@ -57,7 +72,7 @@ int main (int argc, char ** argv){
             case 'f': {
                 if (!fOpt_met){
                     fOpt_met=1;
-                    char * sockName;
+                    sockName=malloc(sizeof(char)*strlen(optarg));
                     strcpy(sockName,optarg);
                     if (!tOpt_met) {
                         timeCheck(argc,argv);
@@ -70,7 +85,7 @@ int main (int argc, char ** argv){
                         connOpen = 1;
                     }
                 }
-                else printf("Opzione -f consetita una sola volta\n");
+                else printWarning(F_REPEAT);
                 break;
             }
 
@@ -82,8 +97,8 @@ int main (int argc, char ** argv){
     
                         char * wArg = malloc( sizeof(char)*strlen(optarg));
                         strcpy(wArg,optarg);
-                        char * dirName = strtok(wArg, ',');
-                        char * numFiles = strtok(NULL, ',');
+                        char * dirName = strtok(wArg, ",");
+                        char * numFiles = strtok(NULL, ",");
                         int n=0;
                         if (numFiles!=NULL) n=atoi(numFiles);
                         navigateDir(dirName,n,1);                        
@@ -104,10 +119,10 @@ int main (int argc, char ** argv){
 
                         char * args = malloc(sizeof(char)*strlen(optarg));
                         strcpy(args, optarg);
-                        char * currArg = strtok(args, ',');
+                        char * currArg = strtok(args, ",");
                         if (writeFile(currArg,expelledFiles)==-1) errEx();
 
-                        while ((currArg=strtok(NULL,','))!=NULL){
+                        while ((currArg=strtok(NULL,","))!=NULL){
                             if (writeFile(currArg,expelledFiles)==-1) errEx();
                         }
                         free(args);
@@ -123,12 +138,12 @@ int main (int argc, char ** argv){
                     if (optarg!=NULL) {
                         char * rArgs = malloc(sizeof(char)*strlen(optarg));
                         strcpy(rArgs, optarg);
-                        char * fToRead = strtok(rArgs,',');
-                        void ** buffer;
-                        size_t * bufferSize;
+                        char * fToRead = strtok(rArgs,",");
+                        void ** buffer=NULL;
+                        size_t * bufferSize=NULL;
                         if (readFile(fToRead, buffer, bufferSize)==-1) errEx();
 
-                        while ((fToRead = strtok(NULL, ','))!=NULL) {
+                        while ((fToRead = strtok(NULL, ","))!=NULL) {
                             if (readFile(fToRead, buffer, bufferSize)==-1) errEx();
                         }
                         
@@ -161,7 +176,7 @@ int main (int argc, char ** argv){
             case 'd': {
                 if(optarg!=NULL){
                     if (dirReadFiles==NULL){
-                        dirReadFiles=malloc(sizeof(char)*MAX_NAME_LEN); //TO DOFREE NEL CLEANUP
+                        dirReadFiles=malloc(sizeof(char)*MAX_NAME_LEN);
                     }
                     strcpy(dirReadFiles,optarg);
                 }
@@ -171,7 +186,7 @@ int main (int argc, char ** argv){
             case 'D': {
                 if (optarg!=NULL) {
                     if (expelledFiles==NULL) {
-                        expelledFiles=malloc(sizeof(char)*MAX_NAME_LEN); //TO DO FREE NEL CLEANUP
+                        expelledFiles=malloc(sizeof(char)*MAX_NAME_LEN);
                     }
                     strcpy(expelledFiles,optarg);
                 }
@@ -182,6 +197,16 @@ int main (int argc, char ** argv){
                 printWarning(INVALID_OPT);
         }
     }
+
+    cleanup();
+
+    if (closeConnection(sockName)==-1) { 
+        perror("Error:");
+        exit(EXIT_FAILURE);
+    }
+
+    return 0;
+
 }
 
 
@@ -198,7 +223,7 @@ void printOpt(){
 void timeCheck (int argc, char ** argv){
     int t_opt;
     while ((t_opt = getopt(argc,argv,"t"))!=-1) {
-        if (t_opt == "t"){
+        if (t_opt == 't'){
             msec = atoi(argv[optind++]);
             t_opt=1;
         }
@@ -219,7 +244,7 @@ void printWarning(int warno) {
             printf("Argomenti non specificati per un'opzione che li richiede\n");
 
         case INVALID_OPT:
-            printWarning("Opzione non supportata\n");
+            printf("Opzione non supportata\n");
 
     }
 }
@@ -239,10 +264,10 @@ void navigateDir(char * dirName, int n, int j) {
     if (n==0) { 
         errno=0;
         if ((currFile=readdir(dirToWrite))==NULL)
-            if (errno!=0) errEx;
+            if (errno!=0) errEx();
 
         while (currFile!=NULL) {
-           if (stat(currFile,&dirStreamInfo)==-1) errEx();
+           if (stat(currFile->d_name,&dirStreamInfo)==-1) errEx();
            char * fileName = malloc(sizeof(char)*2048);
            strcpy(fileName, dirName);
            strcat(fileName, "/");
@@ -250,7 +275,7 @@ void navigateDir(char * dirName, int n, int j) {
            if(fileName[0]!='.'){
                 if (S_ISDIR(dirStreamInfo.st_mode)) navigateDir(fileName, 0, j);
                 else if((writeFile(fileName,expelledFiles)) == -1) errEx();
-                currFile=readdir(dirName);
+                currFile=readdir(dirToWrite);
            }
            free(fileName);
         }
@@ -261,7 +286,7 @@ void navigateDir(char * dirName, int n, int j) {
         if ((currFile=readdir(dirToWrite))==NULL)
             if (errno!=0) errEx();
         while (j<=n && currFile!=NULL) {
-           if (stat(currFile,&dirStreamInfo)==-1) errEx();
+           if (stat(currFile->d_name,&dirStreamInfo)==-1) errEx();
            char * fileName = malloc(sizeof(char)*2048);
            strcpy(fileName, dirName);
            strcat(fileName, "/");
@@ -269,7 +294,7 @@ void navigateDir(char * dirName, int n, int j) {
            if(fileName[0]!='.'){
                 if (S_ISDIR(dirStreamInfo.st_mode)) navigateDir(fileName, n, j);
                 else if((writeFile(fileName,expelledFiles)) == -1) errEx();
-                currFile=readdir(dirName);
+                currFile=readdir(dirToWrite);
                 j++;
            }
             free(fileName);
@@ -277,3 +302,8 @@ void navigateDir(char * dirName, int n, int j) {
     }
 }
 
+void cleanup(){
+    if (expelledFiles!= NULL) free(expelledFiles);
+    if (dirReadFiles!= NULL) free(dirReadFiles);
+    if (sockName!=NULL) free(sockName);
+}

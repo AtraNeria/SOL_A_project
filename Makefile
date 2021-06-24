@@ -1,20 +1,24 @@
 CC = gcc
 FLAGS = -Wall
-OBJECTS = api.o client.o server.o main.o
+OBJECTS = api.o client.o server.o main.o list.o
 TARGETS = main.out client.out
 
 .PHONY: all clean cleanall
 
 
-api.o: api.c client_api.h
+list.o: list.c list.h
 	$(CC) $(FLAGS) $< -c -o $@
 
 
-client.o: client.c
+api.o: api.c client_api.h commProtocol.h list.h
 	$(CC) $(FLAGS) $< -c -o $@
 
 
-server.o: server.c server.h
+client.o: client.c client_api.h
+	$(CC) $(FLAGS) $< -c -o $@
+
+
+server.o: server.c server.h commProtocol.h list.h
 	$(CC) $(FLAGS) $< -c -o $@
 
 
@@ -24,11 +28,11 @@ main.o: main.c
 
 
 
-main.out: main.o server.o
-	$(CC) $(FLAGS) $^ -o $@
+main.out: main.o server.o list.o
+	$(CC) $(FLAGS) -pthread $^ -o $@
 
 
-client.out: client.o api.o
+client.out: api.o client.o list.o
 	$(CC) $(FLAGS) $^ -o $@
 
 

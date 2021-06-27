@@ -59,6 +59,7 @@ int main (int argc, char ** argv){
     struct timespec absolute_time;
     absolute_time.tv_nsec = 1000000000;     //1 sec
 
+    // Parsing delle opzioni passate a terminale
     while ((curr_opt=getopt(argc, argv, optstring))!=-1) {
       switch (curr_opt) {
 
@@ -71,19 +72,23 @@ int main (int argc, char ** argv){
 
             case 'f': {
                 if (!fOpt_met){
-                    fOpt_met=1;
-                    sockName=malloc(sizeof(char)*strlen(optarg));
-                    strcpy(sockName,optarg);
-                    if (!tOpt_met) {
-                        timeCheck(argc,argv);
-                    }
-                    if (!connOpen) {
-                        if (openConnection(sockName, msec, absolute_time)==-1){
-                            perror("Error:");
-                            exit(EXIT_FAILURE);
+                    if (optarg!=NULL){
+                        fOpt_met=1;
+                        sockName=malloc(sizeof(char)*strlen(optarg));
+                        strcpy(sockName,optarg);
+                        if (!tOpt_met) {
+                            timeCheck(argc,argv);
                         }
-                        connOpen = 1;
+                        if (!connOpen) {
+                            if (openConnection(sockName, msec, absolute_time)==-1){
+                                perror("Error:");
+                                exit(EXIT_FAILURE);
+                            }
+                            connOpen = 1;
+                        }
                     }
+
+                    else printWarning (NO_ARG); 
                 }
                 else printWarning(F_REPEAT);
                 break;
@@ -160,8 +165,11 @@ int main (int argc, char ** argv){
 
             case 't': {
                 if(!tOpt_met){ 
-                    msec=atoi(argv[optind++]);
-                    tOpt_met=1;
+                    if (optarg!=NULL){
+                        msec=atoi(optarg);
+                        tOpt_met=1;
+                    }
+                    else printWarning(NO_ARG);
                 }
                 else printWarning (T_REPEAT);            
                 break;
@@ -235,16 +243,21 @@ void printWarning(int warno) {
 
         case CONN_CLOSED:
             printf ("Richiesta non eseguibile per connessione al server non ancora aperta\n");
+            break;
 
         case T_REPEAT:
             printf("Verrà considerato valido il valore specificato \
                                 nella prima occorrenza di -t\n"); 
+            break;
 
         case NO_ARG:
             printf("Argomenti non specificati per un'opzione che li richiede\n");
+            break;
 
         case INVALID_OPT:
             printf("Opzione non supportata\n");
+            break;
+        
 
     }
 }

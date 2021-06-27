@@ -24,6 +24,10 @@ void cleanup(pthread_t workers[], int index, node * socket_list);
 //inizializza lo storage all'arrivo del primo file; ne ritorna il puntatore
 fileNode * initStorage(FILE * f, char * fname, int fOwner);
 
+/* Invia esito res di un'operazione al client fd
+    Restituisce 0 se l'invio ha successo, -1 altrimenti
+*/
+int sendAnswer (int fd, int res);
 
 int threadQuantity;
 int storageDim;
@@ -228,11 +232,83 @@ void * manageRequest() {
 
         ssize_t reqRes;
         void * buffer=NULL;
-        if ((reqRes=read(currentRequest, buffer, 2048))==-1)
+        if ((reqRes=read(currentRequest, buffer, MAX_BUF_SIZE))==-1)
             errEx();
+
         //formato richiesta: codice operazione, nomeFile
-        //da parsare e fare dispatching tramite switch
+        char * request;
+        request = strtok(buffer, ",");
+        int code =atoi(request);
+        char * reqArg;
+
+        switch (code) {
+
+            case RD:
+                break;
+            
+            case WR:
+                break;
+            
+            case OP:
+                break;
+
+            case RM:
+
+                reqArg = strtok (NULL, ",");
+                if (reqArg == NULL) sendAnswer (currentRequest, FAILURE);
+
+                else {
+                    fileNode * fToRm;
+                    if ((fToRm=searchFile(reqArg, storage))==NULL) sendAnswer(currentRequest, FAILURE);
+                    else deleteFile (fToRm, &storage, &lastAddedFile, &fileCount);
+                    sendAnswer(currentRequest, SUCCESS);
+                }
+                break;
+            
+            case PRC:
+                break;
+            
+            case PUC:
+
+                reqArg = strtok (NULL, ",");
+                if (reqArg == NULL) sendAnswer (currentRequest, FAILURE);
+                else {
+                    if (storage == NULL) initStorage (NULL, reqArg, 0);
+                    else {
+                        if (searchFile(reqArg,storage) == NULL) {
+                            addFile (NULL, reqArg, 0, &lastAddedFile, &fileCount);
+                            sendAnswer (currentRequest, SUCCESS);
+                        }
+                        else sendAnswer (currentRequest, FAILURE);
+                    }
+                }
+                break;
+
+            case RDM:
+                break;
+
+            default:
+                break;
+        }
+
     }
 
 }
 
+
+int sendAnswer (int fd, int res) {
+    size_t writeSize = sizeof(res);
+    void * buff = malloc (writeSize);
+
+    ssize_t nWritten;
+    while ( writeSize > 0) {
+        if ((nWritten = write(fd, buff, writeSize))==-1) {
+            free (buff);
+            return -1;
+        }
+            writeSize -= nWritten;
+    }
+
+    free (buff);
+    return 0;
+}

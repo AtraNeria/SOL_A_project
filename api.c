@@ -17,10 +17,11 @@
 #define O_LOCK 10
 
 #define SET_LO if (lastOperation==1) lastOperation=0
+#define FREE_RET {free(buffer); free(buffRead); return -1;}
 
 
-extern msec;
-extern expelledFiles;
+extern int msec;
+extern char * expelledFiles;
 int clientSFD;
 /* Viene settata a 1 quando una open viene fatta con successo e
   rimessa a 0 all'operazione successiva; usata per check nella 
@@ -39,7 +40,7 @@ strNode * openFiles = NULL;
 */
 ssize_t writeAndRead(void * bufferToWrite, void ** bufferToRead, size_t bufferSize, size_t answer);
 
-int openConnection(const char* sockname, int msec, const struct timespec abstime) {     //see timespec_get (da settare nel client prima della chiamata)
+int openConnection (const char* sockname, int msec, const struct timespec abstime) {     //see timespec_get (da settare nel client prima della chiamata)
     long int total_t=0;                     //tempo totale passato da confrontare con il tempo limite
 
     int result;                             //risultato della connessione
@@ -50,7 +51,7 @@ int openConnection(const char* sockname, int msec, const struct timespec abstime
     clientSFD = socket(AF_UNIX, SOCK_STREAM, 0);
     struct sockaddr_un sa;
 
-    int name_len = strlen(sockname);                        //controllo che il nome della seocket non sfori la lunghezza massima
+    int name_len = strlen(sockname);                        //controllo che il nome della socket non sfori la lunghezza massima
     if (name_len > MAX_LEN) {
         fprintf(stderr, "Nome socket troppo lungo\n" );
         return -1;
@@ -71,13 +72,13 @@ int openConnection(const char* sockname, int msec, const struct timespec abstime
 
 }
 
-int closeConnection(const char* sockname) {
+int closeConnection (const char* sockname) {
     int res;
     res = close(clientSFD);     //setta errno, eventuale perror in client
     return res;
 }
 
-int openFile(const char* pathname, int flags){
+int openFile (const char* pathname, int flags){
 
     int fNameLen= strlen(pathname);
     if(fNameLen > MAX_NAME_LEN) {
@@ -99,7 +100,7 @@ int openFile(const char* pathname, int flags){
                 strcpy (buffer, PUB_CREATE);
                 strcat (buffer,pathname);
 
-                if (writeAndRead(buffer, &buffRead, nToWrite, MAX_BUF_SIZE)==-1) return -1;
+                if (writeAndRead(buffer, &buffRead, nToWrite, MAX_BUF_SIZE)==-1) FREE_RET;
                 break;
 
             // apro un file locked
@@ -108,7 +109,7 @@ int openFile(const char* pathname, int flags){
                 strcpy (buffer, "op,fl,");
                 strcat (buffer,pathname);
                 if (write(clientSFD, &buffer, sizeof(buffer))==-1) {
-                    return -1;
+                    FREE_RET;
                 }
                 break;
 
@@ -120,7 +121,7 @@ int openFile(const char* pathname, int flags){
                 strcat (buffer,pathname);
                 nToWrite = sizeof(char)*(strlen(PRIV_CREATE)+strlen(pathname));
 
-                if (writeAndRead(buffer,&buffRead, nToWrite, MAX_BUF_SIZE)==-1) return -1;
+                if (writeAndRead(buffer,&buffRead, nToWrite, MAX_BUF_SIZE)==-1) FREE_RET;
                 break;
 
             default:
@@ -136,7 +137,7 @@ int openFile(const char* pathname, int flags){
         strcpy (buffer, OPEN);
         strcat (buffer,pathname);
 
-        if (writeAndRead(buffer,&buffRead, nToWrite, MAX_BUF_SIZE)==-1) return -1;
+        if (writeAndRead(buffer,&buffRead, nToWrite, MAX_BUF_SIZE)==-1) FREE_RET;
     }
 
     int answer = atoi((char *)buffRead);
@@ -160,7 +161,7 @@ int openFile(const char* pathname, int flags){
     return answer;
 }
 
-int readFile(const char * pathname, void ** buf, size_t* size) {
+int readFile (const char * pathname, void ** buf, size_t* size) {
 
     // Controllo lunghezza nome
     int fNameLen = strlen (pathname);
@@ -191,7 +192,50 @@ int readFile(const char * pathname, void ** buf, size_t* size) {
     return result;
 }
 
-int writeFile(const char* pathname, const char* dirname){
+int readNFiles (int N, const char* dirname) {
+
+    // Inserisco N nella stringa di richiesta
+    char nF [32];
+    sprintf (nF,"%d",N);
+    size_t writeSize = sizeof(char)*(strlen(RD_MUL)+strlen(nF));
+    void * buffer = malloc (writeSize);
+    strcpy (buffer, RD_MUL);
+    strcat (buffer, nF);
+    size_t readS = sizeof(fileInfo)+MAX_FILE_SIZE+MAX_NAME_LEN;
+    void * buffRead = malloc (readS);
+
+    // Ciclo per chiedere un file alla volta finchè non ne leggo N o il server non ha più file da inviare
+    int j = 1;
+    while (j<=N && buffRead!=NULL) {
+        if (writeAndRead(buffer, &buffRead, writeSize, readS) == -1) FREE_RET
+        // Creo il file in locale; se già esistente viene sovrascritto
+        fileInfo * currFile = (fileInfo *) buffRead;
+        int locationLen = strlen(dirname)+strlen("/")+strlen(currFile->fileName);
+        char loc [locationLen];
+
+        FILE * nf;
+        if ((nf=fopen(loc,"w")) == NULL) FREE_RET
+        // Copio il contenuto del file passato dal server
+        if (fputs(currFile->fPointer,nf)<=0) FREE_RET
+        j++;
+
+        if (fclose(nf)==-1) FREE_RET
+    }
+
+    free (buffer);
+    free (buffRead);
+
+    // Errore se il server è vuoto e non ha passato nulla
+    if (j==1 && j<=N && buffRead==NULL) {
+        errno = ENOENT;
+        return -1;
+    }
+
+    return j;
+    
+}
+
+int writeFile (const char* pathname, const char* dirname){
 
     // Controllo lunghezza nome
     size_t fNameLen = strlen(pathname);
@@ -224,7 +268,7 @@ int writeFile(const char* pathname, const char* dirname){
     }
     
     // Trovo la grandezza del file
-    struct stat * fSt;
+    struct stat * fSt = NULL;
     if (stat(pathname, fSt)==-1) {
         fclose(fToWrite); 
         return -1;
@@ -245,7 +289,7 @@ int writeFile(const char* pathname, const char* dirname){
     return 0;
 }
 
-int appendToFile(const char* pathname, void* buf, size_t size, const char* dirname){
+int appendToFile (const char* pathname, void* buf, size_t size, const char* dirname){
     
     //controllo validità nome
     size_t fNameLen = strlen(pathname);
@@ -260,12 +304,12 @@ int appendToFile(const char* pathname, void* buf, size_t size, const char* dirna
 
     //invio richiesta operazione e buffer al server
     size_t nToSend = sizeof(char) * (strlen(WRITE) + size + fNameLen);
-    void * bufferToSend = malloc (nToSend);
-    strcpy (bufferToSend, WRITE);       //Buffer: operazione, nome file, contenuto di cui fare append
-    strcat(bufferToSend, pathname);
-    strcat(bufferToSend, buf);
+    void * buffer = malloc (nToSend);
+    strcpy (buffer, WRITE);       //Buffer: operazione, nome file, contenuto di cui fare append
+    strcat(buffer, pathname);
+    strcat(buffer, buf);
     void * buffRead = malloc(MAX_BUF_SIZE);
-    if (writeAndRead(bufferToSend, &buffRead, nToSend, MAX_BUF_SIZE) ==-1) return -1;
+    if (writeAndRead(buffer, &buffRead, nToSend, MAX_BUF_SIZE) ==-1) FREE_RET
     
     // leggo codice di risposta: Success o Failure
     int res = atoi((char *) buffRead);
@@ -273,7 +317,7 @@ int appendToFile(const char* pathname, void* buf, size_t size, const char* dirna
     return res;
 }
 
-int removeFile(const char* pathname){
+int removeFile (const char* pathname){
 
     // Controllo lunghezza nome
     int fNameLen = strlen(pathname);
@@ -290,22 +334,35 @@ int removeFile(const char* pathname){
     int result;
     // Se la comunicazione col server è fallita riporto errore dopo aver deallocato
     if ((result = writeAndRead(buffer, buffRead, bufferSize, MAX_BUF_SIZE))==-1) {
-        free (buffer);
-        free(buffRead);
-        return -1;
+        FREE_RET
     }
     // Se ha avuto successo riporto l'esito della rimozione
     else {
         int answer = atoi((char *) buffRead);
         free (buffer);
         free (buffRead);
+        // Se è stato rimosso da server chiuso il file da lato client
+        if (answer == SUCCESS) closeFile (pathname);
         return answer;
     }
     
     
 }
 
-ssize_t writeAndRead(void * bufferToWrite, void ** bufferToRead, size_t bufferSize, size_t answer){
+int closeFile (const char* pathname){
+    // Controllo lunghezza nome
+    int fNameLen = strlen(pathname);
+    if (fNameLen > MAX_NAME_LEN) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+
+    // Chiudo in locale il file
+    int close = closeString (pathname, &openFiles);
+    return close;
+}
+
+ssize_t writeAndRead (void * bufferToWrite, void ** bufferToRead, size_t bufferSize, size_t answer){
                 
     //write finchè non ho scritto tutti i byte del buffer
     size_t nToWrite = bufferSize;

@@ -28,7 +28,7 @@ void addFile (FILE * f, char * fname, int fOwner, fileNode **lastAddedFile, int 
     lastAddedFile = newFile;
 }
 
-fileNode * searchFile (FILE * f, char * fname, fileNode * storage) {
+fileNode * searchFile (char * fname, fileNode * storage) {
     fileNode * currFP = storage;
     while (currFP->next!= NULL) {
         if (strcmp(currFP->fileName, fname)==0)
@@ -51,7 +51,7 @@ void deleteFile (fileNode * f, fileNode ** storage, fileNode ** lastAddedFile, i
     fileCount--;
 }
 
-strNode * addString (char * string, strNode * list) {
+strNode * addString (const char * string, strNode * list) {
 
     if (searchString(string, list) !=-1 ) {
         errno = EEXIST;
@@ -65,7 +65,7 @@ strNode * addString (char * string, strNode * list) {
     return newNode;
 }
 
-int deleteString (char * string, strNode ** list) {
+int deleteString (const char * string, strNode ** list) {
 
     strNode * currNode = list;
     strNode * prevNode = NULL;
@@ -106,31 +106,34 @@ int deleteString (char * string, strNode ** list) {
     
 }
 
-int searchString(char * string, strNode * list) {
+int searchString(const char * string, strNode * list) {
     strNode * curr = list;
     while (curr != NULL) {
-        if (strcmp(string,curr->str)==0) return curr->str;
+        if (strcmp(string,curr->str)==0) return curr->state;
     }
     return -1;
 }
 
-int closeString (char * string, strNode ** list) {
+int closeString (const char * string, strNode ** list) {
     int searchR = searchString(string, list);
     switch (searchR) {
-    case -1:
-        errno = ENOENT;
-        return -1;
-        break;
-    
-    case 0:
-        return 0;
+        case -1:
+            errno = ENOENT;
+            return -1;
+            break;
+        
+        case 0:
+            return 0;
 
-    case 1:
-        strNode * curr = list;
-        while (strcmp(curr->str,string)!=0) {
-            curr=curr->next;
+        case 1: {
+            strNode * curr = list;
+            while (strcmp(curr->str,string)!=0) {
+                curr=curr->next;
+            }
+            curr->state=0;
+            return 0;
         }
-        curr->state=0;
-        return 0;
     }
+
+    return 0;
 }

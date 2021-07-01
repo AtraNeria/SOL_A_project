@@ -17,15 +17,16 @@ node * deleteNode(node * List){
     return List;
 }
 
-void addFile (FILE * f, char * fname, int fOwner, fileNode **lastAddedFile, int * fileCount) {
+void addFile (FILE * f, long size, char * fname, int fOwner, fileNode **lastAddedFile, int * fileCount) {
     fileNode * newFile = malloc(sizeof(fileNode));
     newFile->owner = fOwner;
+    newFile->fileSize = size;
     newFile->fPointer = f;
     newFile->next = NULL;
-    newFile->prev = lastAddedFile;
+    newFile->prev = *lastAddedFile;
     strcpy (newFile->fileName, fname);
     fileCount++;
-    lastAddedFile = newFile;
+    *lastAddedFile = newFile;
 }
 
 fileNode * searchFile (char * fname, fileNode * storage) {
@@ -40,8 +41,8 @@ fileNode * searchFile (char * fname, fileNode * storage) {
 }
 
 void deleteFile (fileNode * f, fileNode ** storage, fileNode ** lastAddedFile, int * fileCount) {
-    if(f == lastAddedFile) lastAddedFile=f->prev;
-    if(f == storage) storage=f->next;
+    if(f == *lastAddedFile) *lastAddedFile=f->prev;
+    if(f == *storage) *storage=f->next;
     fileNode * p = f->prev;
     fileNode * n = f->next;
     p->next = n;
@@ -67,7 +68,7 @@ strNode * addString (const char * string, strNode * list) {
 
 int deleteString (const char * string, strNode ** list) {
 
-    strNode * currNode = list;
+    strNode * currNode = *list;
     strNode * prevNode = NULL;
     int cmp;
     while (currNode->next != NULL && (cmp=strcmp(string, currNode->str))!=0) {
@@ -86,7 +87,7 @@ int deleteString (const char * string, strNode ** list) {
         // Il nodo da eliminare è in testa alla lista
         if (prevNode == NULL) {
             prevNode = currNode;
-            list = currNode;
+            *list = currNode;
             free(prevNode);
             return 0;
         }
@@ -115,7 +116,7 @@ int searchString(const char * string, strNode * list) {
 }
 
 int closeString (const char * string, strNode ** list) {
-    int searchR = searchString(string, list);
+    int searchR = searchString(string, *list);
     switch (searchR) {
         case -1:
             errno = ENOENT;
@@ -126,7 +127,7 @@ int closeString (const char * string, strNode ** list) {
             return 0;
 
         case 1: {
-            strNode * curr = list;
+            strNode * curr = *list;
             while (strcmp(curr->str,string)!=0) {
                 curr=curr->next;
             }

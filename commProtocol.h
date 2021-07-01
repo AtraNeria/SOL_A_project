@@ -24,7 +24,7 @@
 // Grandezze supportate
 #define MAX_BUF_SIZE 4096
 #define MAX_NAME_LEN 2048
-#define MAX_FILE_SIZE 215.144 // 1/4 Mb
+#define MAX_FILE_SIZE 262144 // 262'144 bytes ==  1/4 MB
 
 // Codici esiti operazioni
 #define SUCCESS 0

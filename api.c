@@ -22,6 +22,7 @@
 
 extern int msec;
 extern char * expelledFiles;
+extern char * dirReadFiles;
 int clientSFD;
 /* Viene settata a 1 quando una open viene fatta con successo e
   rimessa a 0 all'operazione successiva; usata per check nella 
@@ -39,6 +40,11 @@ strNode * openFiles = NULL;
     la taglia del buffer letto.
 */
 ssize_t writeAndRead(void * bufferToWrite, void ** bufferToRead, size_t bufferSize, size_t answer);
+
+/* Salva nella cartella dirName il file pathname letto il cui contenuto è in buffer, di grandezza size.
+    Restituisce -1 in caso di fallimento settando errno, 0 in caso di successo
+*/
+int saveFile (void * buffer, const char * dirName, const char * pathname, size_t size);
 
 int openConnection (const char* sockname, int msec, const struct timespec abstime) {     //see timespec_get (da settare nel client prima della chiamata)
     long int total_t=0;                     //tempo totale passato da confrontare con il tempo limite
@@ -188,6 +194,14 @@ int readFile (const char * pathname, void ** buf, size_t* size) {
     //Invio richiesta
     result = writeAndRead(buffer, buf, nToWrite, MAX_FILE_SIZE);
     SET_LO;
+    
+    //Se ho avuto successo salvo il file nella cartella specificata per i file letti se specificata
+    if (result!=-1 && dirReadFiles!=NULL) {
+        if (saveFile(buffer, NULL, pathname, MAX_FILE_SIZE)==-1) {
+            free (buffer);
+            return -1;
+        }        
+    }
     free (buffer);
     return result;
 }
@@ -201,26 +215,61 @@ int readNFiles (int N, const char* dirname) {
     void * buffer = malloc (writeSize);
     strcpy (buffer, RD_MUL);
     strcat (buffer, nF);
-    size_t readS = sizeof(fileInfo)+MAX_FILE_SIZE+MAX_NAME_LEN;
+
+    size_t readS = MAX_BUF_SIZE+MAX_FILE_SIZE;
     void * buffRead = malloc (readS);
 
-    // Ciclo per chiedere un file alla volta finchè non ne leggo N o il server non ha più file da inviare
+    // Invio richiesta al server
+    size_t nToWrite = writeSize;
+    ssize_t nWritten;
+    
+    while (nToWrite>0) {
+        if ((nWritten = write(clientSFD, buffer, nToWrite))==-1) FREE_RET
+            nToWrite -= nWritten;
+        }
+    
+
+    // Ciclo per leggere un file alla volta e copiarlo, finchè non ne leggo N o arrivo all'ultimo inviato
     int j = 1;
     while (j<=N && buffRead!=NULL) {
-        if (writeAndRead(buffer, &buffRead, writeSize, readS) == -1) FREE_RET
-        // Creo il file in locale; se già esistente viene sovrascritto
-        fileInfo * currFile = (fileInfo *) buffRead;
-        int locationLen = strlen(dirname)+strlen("/")+strlen(currFile->fileName);
-        char loc [locationLen];
 
-        FILE * nf;
-        if ((nf=fopen(loc,"w")) == NULL) FREE_RET
-        // Copio il contenuto del file passato dal server
-        if (fputs(currFile->fPointer,nf)<=0) FREE_RET
+        char * tk; // token tmp
+        size_t fileSize; // taglia del file
+        char infoIndex[MAX_BUF_SIZE]; // header completo
+        char pathName[MAX_NAME_LEN];  // nome file
+
+        // Leggo il primo file e lo carico in un buffer void*
+        size_t nToRd=readS;
+        ssize_t nRead;
+        while (nToRd>0) {
+            if ((nRead=read(clientSFD,buffRead,readS))==-1) FREE_RET
+            if (nRead == 0) break;
+            nToRd-=nRead;
+        }
+
+        // Estraggo il nome da buffer
+        tk = strtok(buffRead,",");
+        strcpy(pathName, tk);
+
+        strcpy(infoIndex,tk);
+        strcat(infoIndex,",");
+
+        // Estraggo la taglia
+        tk = strtok(NULL,"\n");
+        fileSize = atol(tk);
+
+        strcat(infoIndex,tk);
+        strcat(infoIndex,"\n");
+
+
+        // Sposto il puntatore a inizio contenuto file
+        buffRead+=strlen(infoIndex);
+        // Salvo il file
+        saveFile(buffRead, dirname, pathName, fileSize);
+
         j++;
 
-        if (fclose(nf)==-1) FREE_RET
-    }
+    } 
 
     free (buffer);
     free (buffRead);
@@ -298,16 +347,21 @@ int appendToFile (const char* pathname, void* buf, size_t size, const char* dirn
         return -1;
     }
     
-    //controllo presenza del file
+    // Controllo presenza del file
     int openRes;
     if((openRes=openFile(pathname, 0)) == -1) return -1;
 
-    //invio richiesta operazione e buffer al server
-    size_t nToSend = sizeof(char) * (strlen(WRITE) + size + fNameLen);
+    // Creo stringa di richiesta: operazione, nomeFile, size \n
+    char * opString = NULL;
+    sprintf(opString, "%d,%li,%s\n",WR,size,pathname);
+
+    //Aggiungo alla richiesta il contenuto da scrivere
+    size_t nToSend = (sizeof(char) * (strlen(opString))) + size;
     void * buffer = malloc (nToSend);
-    strcpy (buffer, WRITE);       //Buffer: operazione, nome file, contenuto di cui fare append
-    strcat(buffer, pathname);
+    strcpy (buffer, opString);
     strcat(buffer, buf);
+
+    // Invio
     void * buffRead = malloc(MAX_BUF_SIZE);
     if (writeAndRead(buffer, &buffRead, nToSend, MAX_BUF_SIZE) ==-1) FREE_RET
     
@@ -389,5 +443,30 @@ ssize_t writeAndRead (void * bufferToWrite, void ** bufferToRead, size_t bufferS
     }
 
     return totByteRead;
+
+}
+
+int saveFile (void * buffer, const char * dirName, const char * pathname, size_t size) {
+
+    //Apro file e se non esiste lo creo
+    char * fpath=NULL;
+    // Se non è specificata una cartella uso quella per i file letti
+    if(dirName == NULL) {
+        strcpy(fpath, dirReadFiles);
+        strcat(fpath,"/");
+        strcat(fpath,pathname);
+    }
+    else {
+        strcpy(fpath, dirName);
+        strcat(fpath,"/");
+        strcat(fpath,pathname);
+    }
+    FILE * f;
+    if ((f = fopen(fpath, "w+"))==NULL) return -1;
+
+    // Copio il contenuto del buffer
+    fwrite(buffer, sizeof(char), size, f);
+    if (fclose(f) == EOF) return -1;
+    return 0;
 
 }

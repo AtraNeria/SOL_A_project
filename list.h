@@ -12,17 +12,13 @@ typedef struct node {
 // Nodo per liste doppiamente connesse con elementi che contengono un puntatore ad un file e le sue informazioni
 typedef struct fileNode {
     int owner;
+    long fileSize;
     char * fileName;
     FILE * fPointer;
     struct fileNode * next;
     struct fileNode * prev;
 } fileNode;
 
-// Struttura per passare un file con le sue informazioni senza compromettere la lista tenuta dal server
-typedef struct fileInfo {
-    char * fileName;
-    void * fPointer;
-} fileInfo;
 
 /* Nodo contenente una stringa, un puntatore al prossimo elemento della lista
     e un int significante lo stato; sarà settato ad un 1 se il file di nome
@@ -46,7 +42,7 @@ node * deleteNode(node * List);
 
 /* Aggiunge un nodo puntante a file f di nome fname in coda ad una lista di elementi fileNode con fileCount elementi
 */
-void addFile (FILE * f, char * fname, int fOwner, fileNode **lastAddedFile, int * fileCount);
+void addFile (FILE * f, long size, char * fname, int fOwner, fileNode **lastAddedFile, int * fileCount);
 
 /* Cerca il nodo con nome fname nella lista storage
     restituisce il puntatore al file cercato se presente, NULL altimenti

@@ -18,6 +18,7 @@
 #define F_REPEAT 5
 #define NO_ARG 6
 #define INVALID_OPT 7
+#define NO_DIR 8
 
 // Stampa a schermo le opzioni supportate
 void printOpt();
@@ -63,19 +64,22 @@ int main (int argc, char ** argv){
     while ((curr_opt=getopt(argc, argv, optstring))!=-1) {
       switch (curr_opt) {
 
+          // Stampa opzioni e termina
           case 'h': {
                 printOpt();
-                return 1;
+                return 0;
                 break;
             }
 
 
+            // Apre la connessione alla socket passata come argomento
             case 'f': {
                 if (!fOpt_met){
                     if (optarg!=NULL){
                         fOpt_met=1;
                         sockName=malloc(sizeof(char)*strlen(optarg));
                         strcpy(sockName,optarg);
+                        // Controllo se è stato specificato msec o uso default
                         if (!tOpt_met) {
                             timeCheck(argc,argv);
                         }
@@ -95,6 +99,7 @@ int main (int argc, char ** argv){
             }
 
 
+            // Scrittura su server di file passato come arg
             case 'w': {
                 if(connOpen) {
 
@@ -118,6 +123,8 @@ int main (int argc, char ** argv){
                 break;
             }
 
+
+            // Scrittura lista di file
             case 'W': {
                 if (connOpen){
                     if (optarg!=NULL) {
@@ -137,6 +144,8 @@ int main (int argc, char ** argv){
                 else printWarning(CONN_CLOSED);
             }
 
+
+            // Lettura lista di file
             case 'r': {
                 if (connOpen){
 
@@ -162,7 +171,22 @@ int main (int argc, char ** argv){
                 break;
             }
 
+            // Lettura dei primi n file su server; se n=0 o non specificato leggo tutti i file disponibili
+            case 'R' : {
+                if (connOpen) {
+                    if (dirReadFiles==NULL) printWarning (NO_DIR);
+                    else if (optarg != NULL) {
+                        int n = atoi(optarg);
+                        if (readNFiles(n, dirReadFiles)==-1) errEx();
+                    }
+                    else if (readNFiles(0, dirReadFiles)==-1) errEx();
+                }
+                else printWarning(CONN_CLOSED);
+                break;
+            }
 
+
+            // Specifico msec
             case 't': {
                 if(!tOpt_met){ 
                     if (optarg!=NULL){
@@ -176,11 +200,14 @@ int main (int argc, char ** argv){
             }
 
 
+            // Abilito stampe
             case 'p': {
                 if (!pOpt_met) pOpt_met=1;
                 break;
             }
 
+
+            // Specifico cartella per salvare file letti
             case 'd': {
                 if(optarg!=NULL){
                     if (dirReadFiles==NULL){
@@ -191,6 +218,8 @@ int main (int argc, char ** argv){
                 else printWarning(NO_ARG);
             }
 
+
+            // Specifico cartella per file espulsi
             case 'D': {
                 if (optarg!=NULL) {
                     if (expelledFiles==NULL) {
@@ -199,6 +228,19 @@ int main (int argc, char ** argv){
                     strcpy(expelledFiles,optarg);
                 }
                 else printWarning(NO_ARG);
+            }
+
+
+            // Rimozione file
+            case 'c': {
+                if (connOpen){
+                    if (optarg!=NULL) {
+                        if (removeFile(optarg)==-1)
+                            errEx();
+                    }
+                    else printWarning(NO_ARG);
+                }
+                else printWarning(CONN_CLOSED);
             }
 
             default: 
@@ -258,6 +300,9 @@ void printWarning(int warno) {
             printf("Opzione non supportata\n");
             break;
         
+        case NO_DIR:
+            printf("Directory non specificata con opzione -d");
+            break;
 
     }
 }

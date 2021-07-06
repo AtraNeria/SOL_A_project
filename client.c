@@ -52,7 +52,7 @@ char * expelledFiles=NULL;
 
 int main (int argc, char ** argv){
 
-    const char * optstring = "hf:w:W:D:r:R::d:t:l:u:c:p";   //Opzioni supportate
+    const char * optstring = "-hf:w:W:D:r:R::d:t:l:u:c:p";   //Opzioni supportate
     int curr_opt;
     int fOpt_met = 0;
     int connOpen = 0;
@@ -62,10 +62,10 @@ int main (int argc, char ** argv){
 
     // Parsing delle opzioni passate a terminale
     while ((curr_opt=getopt(argc, argv, optstring))!=-1) {
-      switch (curr_opt) {
+        switch (curr_opt) {
 
           // Stampa opzioni e termina
-          case 'h': {
+            case 'h': {
                 printOpt();
                 return 0;
                 break;
@@ -74,6 +74,7 @@ int main (int argc, char ** argv){
 
             // Apre la connessione alla socket passata come argomento
             case 'f': {
+
                 if (!fOpt_met){
                     if (optarg!=NULL){
                         fOpt_met=1;
@@ -81,7 +82,9 @@ int main (int argc, char ** argv){
                         strcpy(sockName,optarg);
                         // Controllo se è stato specificato msec o uso default
                         if (!tOpt_met) {
+                            int tmp = optind;
                             timeCheck(argc,argv);
+                            optind=tmp;
                         }
                         if (!connOpen) {
                             if (openConnection(sockName, msec, absolute_time)==-1){
@@ -99,7 +102,7 @@ int main (int argc, char ** argv){
             }
 
 
-            // Scrittura su server di file passato come arg
+            // Scrittura su server di n file nella cartella specificata
             case 'w': {
                 if(connOpen) {
 
@@ -112,7 +115,6 @@ int main (int argc, char ** argv){
                         int n=0;
                         if (numFiles!=NULL) n=atoi(numFiles);
                         navigateDir(dirName,n,1);                        
-                        optarg=NULL;
                         free(wArg);
                     }
 
@@ -128,7 +130,6 @@ int main (int argc, char ** argv){
             case 'W': {
                 if (connOpen){
                     if (optarg!=NULL) {
-
                         char * args = malloc(sizeof(char)*strlen(optarg));
                         strcpy(args, optarg);
                         char * currArg = strtok(args, ",");
@@ -142,6 +143,7 @@ int main (int argc, char ** argv){
                     else printWarning(NO_ARG);
                 }
                 else printWarning(CONN_CLOSED);
+                break;
             }
 
 
@@ -216,6 +218,7 @@ int main (int argc, char ** argv){
                     strcpy(dirReadFiles,optarg);
                 }
                 else printWarning(NO_ARG);
+                break;
             }
 
 
@@ -228,6 +231,7 @@ int main (int argc, char ** argv){
                     strcpy(expelledFiles,optarg);
                 }
                 else printWarning(NO_ARG);
+                break;
             }
 
 
@@ -241,10 +245,12 @@ int main (int argc, char ** argv){
                     else printWarning(NO_ARG);
                 }
                 else printWarning(CONN_CLOSED);
+                break;
             }
 
             default: 
                 printWarning(INVALID_OPT);
+                break;
         }
     }
 
@@ -272,9 +278,10 @@ void printOpt(){
 
 void timeCheck (int argc, char ** argv){
     int t_opt;
-    while ((t_opt = getopt(argc,argv,"t"))!=-1) {
+
+    while ((t_opt = getopt(argc,argv,"-:t"))!=-1) {
         if (t_opt == 't'){
-            msec = atoi(argv[optind++]);
+            msec = atoi(optarg);
             t_opt=1;
         }
     }
@@ -314,24 +321,29 @@ void errEx () {
 }
 
 void navigateDir(char * dirName, int n, int j) {
+    // Apro la cartella ./dirName
     DIR * dirToWrite;
     if ((dirToWrite = opendir(dirName))==NULL) errEx();
     struct dirent * currFile;
     struct stat dirStreamInfo;
 
+    // Numero di file da scrivere non specificato
     if (n==0) { 
         errno=0;
         if ((currFile=readdir(dirToWrite))==NULL)
             if (errno!=0) errEx();
 
         while (currFile!=NULL) {
-           if (stat(currFile->d_name,&dirStreamInfo)==-1) errEx();
-           char * fileName = malloc(sizeof(char)*2048);
-           strcpy(fileName, dirName);
-           strcat(fileName, "/");
-           strcat(fileName,currFile->d_name);
-           if(fileName[0]!='.'){
-                if (S_ISDIR(dirStreamInfo.st_mode)) navigateDir(fileName, 0, j);
+            if (stat(currFile->d_name,&dirStreamInfo)==-1) errEx();
+            char * fileName = malloc(sizeof(char)*2048);
+            strcpy(fileName, dirName);
+            strcat(fileName, "/");
+            strcat(fileName,currFile->d_name);
+
+            // if is not a dot file  
+            if(strcmp(currFile->d_name,".")!=0 && strcmp(currFile->d_name,"..")!=0){
+                printf("%s\n",currFile->d_name);
+                if (S_ISDIR(dirStreamInfo.st_mode)) navigateDir(currFile->d_name, 0, j);
                 else if((writeFile(fileName,expelledFiles)) == -1) errEx();
                 currFile=readdir(dirToWrite);
            }
@@ -339,6 +351,7 @@ void navigateDir(char * dirName, int n, int j) {
         }
     }
 
+    // Numero file specifico
     else { 
         errno=0;
         if ((currFile=readdir(dirToWrite))==NULL)
@@ -349,6 +362,8 @@ void navigateDir(char * dirName, int n, int j) {
            strcpy(fileName, dirName);
            strcat(fileName, "/");
            strcat(fileName,currFile->d_name);
+                      printf("%s\n",fileName);
+
            if(fileName[0]!='.'){
                 if (S_ISDIR(dirStreamInfo.st_mode)) navigateDir(fileName, n, j);
                 else if((writeFile(fileName,expelledFiles)) == -1) errEx();
@@ -358,6 +373,7 @@ void navigateDir(char * dirName, int n, int j) {
             free(fileName);
         }
     }
+    closedir(dirToWrite);
 }
 
 void cleanup(){

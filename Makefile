@@ -1,14 +1,16 @@
 CC = gcc
 FLAGS = -Wall
-OBJECTS = api.o client.o server.o main.o list.o
+OBJECTS = api.o client.o server.o main.o list.o protocol.o
 TARGETS = main.out client.out
 
-.PHONY: all clean cleanall
+.PHONY: all clean cleanall test1 cleantest
 
+
+protocol.o: protocol.c commProtocol.h
+	$(CC) $(FLAGS) $< -c -o $@
 
 list.o: list.c list.h
 	$(CC) $(FLAGS) $< -c -o $@
-
 
 api.o: api.c client_api.h commProtocol.h list.h
 	$(CC) $(FLAGS) $< -c -o $@
@@ -28,11 +30,11 @@ main.o: main.c
 
 
 
-main.out: main.o server.o list.o
+main.out: main.o server.o list.o protocol.o
 	$(CC) $(FLAGS) -pthread $^ -o $@
 
 
-client.out: api.o client.o list.o
+client.out: api.o client.o list.o protocol.o
 	$(CC) $(FLAGS) $^ -o $@
 
 
@@ -44,3 +46,14 @@ clean:
 
 cleanall:
 	-rm -f $(OBJECTS) $(TARGETS)
+
+
+
+
+test1:
+	make all
+	mv ./main.out ./client.out ./Test1
+
+cleantest:
+	rm ./Test1/server ./Test1/client.out ./Test1/main.out
+	make cleanall

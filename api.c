@@ -20,6 +20,7 @@
 #define FREE_RET {free(buffer); free(buffRead); return -1;}
 
 
+
 extern int msec;
 extern char * expelledFiles;
 extern char * dirReadFiles;
@@ -46,6 +47,11 @@ ssize_t writeAndRead(void * bufferToWrite, void ** bufferToRead, size_t bufferSi
 */
 int saveFile (void * buffer, const char * dirName, const char * pathname, size_t size);
 
+/* Legge size bytes di buffer e restituisce la risposta contenutavi.
+    
+*/
+int getAnswer(void ** buffer, size_t size);
+
 int openConnection (const char* sockname, int msec, const struct timespec abstime) {     //see timespec_get (da settare nel client prima della chiamata)
     long int total_t=0;                     //tempo totale passato da confrontare con il tempo limite
 
@@ -62,13 +68,19 @@ int openConnection (const char* sockname, int msec, const struct timespec abstim
         fprintf(stderr, "Nome socket troppo lungo\n" );
         return -1;
     } 
-    strcpy(sa.sun_path, sockname);    
+
+    // setto l'indirizzo a cui connettersi
+    strcpy(sa.sun_path, "./");              
+    strcat(sa.sun_path, sockname);
+    sa.sun_family=AF_UNIX;              
 
     while ( (result=connect(clientSFD, (struct sockaddr*)&sa, sizeof(sa)))!=0 && total_t < abstime.tv_nsec ){
+
         timespec_get(&start, TIME_UTC);
         if (errno != 0 || errno != ENOENT) {
                 return result;
         }
+
         sleep(msec * 0.001);
         errno=0;
         timespec_get(&end, TIME_UTC);
@@ -80,7 +92,17 @@ int openConnection (const char* sockname, int msec, const struct timespec abstim
 
 int closeConnection (const char* sockname) {
     int res;
-    res = close(clientSFD);     //setta errno, eventuale perror in client
+
+    char * closeReq ="256,-0-";
+    size_t writeSize = sizeof(char)*strlen(closeReq);
+    void * buffer = malloc (writeSize);
+    strcpy(buffer,closeReq);
+    void * buffRead = malloc(MAX_BUF_SIZE);
+
+    int sr = writeAndRead(buffer,&buffRead,writeSize,MAX_BUF_SIZE);
+    res = (sr && close(clientSFD));     //setta errno, eventuale perror in client
+    free(buffer);
+    free(buffRead);
     return res;
 }
 
@@ -95,21 +117,21 @@ int openFile (const char* pathname, int flags){
     void * buffer;
     void * buffRead = malloc(MAX_BUF_SIZE); 
     size_t nToWrite;
+
     if ( flags != 0) {
         switch (flags){
 
             // creo un file
             case O_CREATE:
-
                 nToWrite = sizeof(char)*(strlen(PUB_CREATE)+fNameLen);  //buffer da inviare a server
                 buffer = malloc(nToWrite);
                 strcpy (buffer, PUB_CREATE);
                 strcat (buffer,pathname);
-
                 if (writeAndRead(buffer, &buffRead, nToWrite, MAX_BUF_SIZE)==-1) FREE_RET;
                 break;
 
-            // apro un file locked
+
+            /* apro un file locked
             case O_LOCK:
                 buffer = malloc(sizeof(char)*(strlen(PUB_CREATE)+strlen(pathname)));
                 strcpy (buffer, "op,fl,");
@@ -121,14 +143,13 @@ int openFile (const char* pathname, int flags){
 
             // creo un file locked
             case O_CREATE | O_LOCK :
-
                 buffer = malloc(sizeof(char)*(strlen(PRIV_CREATE)+strlen(pathname)));
                 strcpy (buffer, PRIV_CREATE);
                 strcat (buffer,pathname);
                 nToWrite = sizeof(char)*(strlen(PRIV_CREATE)+strlen(pathname));
 
                 if (writeAndRead(buffer,&buffRead, nToWrite, MAX_BUF_SIZE)==-1) FREE_RET;
-                break;
+                break;*/
 
             default:
                 fprintf(stderr,"Flags non valide\n");
@@ -138,20 +159,18 @@ int openFile (const char* pathname, int flags){
 
     // apro un file
     else {
-        nToWrite = sizeof(char)*(strlen(OPEN)+strlen(pathname));
+        nToWrite = sizeof(char)*(strlen(OPEN)+strlen(pathname)+strlen(EOBUFF));
         buffer = malloc(nToWrite);
         strcpy (buffer, OPEN);
         strcat (buffer,pathname);
-
+        strcat (buffer,EOBUFF);
         if (writeAndRead(buffer,&buffRead, nToWrite, MAX_BUF_SIZE)==-1) FREE_RET;
     }
 
-    int answer = atoi((char *)buffRead);
-    free(buffer);
-    free(buffRead);
+    int answer = getAnswer(&buffRead, MAX_BUF_SIZE);
+    //free (buffRead);     SEG FAULT
 
-    // si è provato a creare un file già esistente
-    if(answer==FAILURE && flags==O_CREATE) {
+    if(answer == FAILURE && flags==O_CREATE) {
         errno = EEXIST;
         return -1;
     }
@@ -161,7 +180,7 @@ int openFile (const char* pathname, int flags){
         errno = ENOENT;
         return -1;
     }
-
+    
     if (answer==SUCCESS) lastOperation = 1;
     openFiles=addString(pathname, openFiles);
     return answer;
@@ -288,7 +307,7 @@ int writeFile (const char* pathname, const char* dirname){
 
     // Controllo lunghezza nome
     size_t fNameLen = strlen(pathname);
-    if (fNameLen < MAX_NAME_LEN) {
+    if (fNameLen > MAX_NAME_LEN) {
         errno = ENAMETOOLONG;
         return -1;
     }
@@ -302,27 +321,36 @@ int writeFile (const char* pathname, const char* dirname){
 
     // Apro file in locale 
     FILE * fToWrite; 
-    if ((fToWrite = fopen(pathname, "r+"))== NULL) return -1;
+    if ((fToWrite = fopen(pathname, "r+"))== NULL) {
+        return -1;
+    }
 
     // Richiesta apertura file al server
     int res = openFile(pathname, 0);
+    printf("%d\n",res);
+
     if (res ==-1) {
         if (errno==ENOENT) { 
-            res = openFile(pathname, O_CREATE);  //Se il file non è già presente, lo creo
+            //Se il file non è già presente, lo creo
+            res = openFile(pathname, O_CREATE);
+            printf("%d\n",res);
         }
         else {
-            fclose(fToWrite); 
+            // Se il file è presente non lo sovrascrivo
+            fclose(fToWrite);                   
             return -1;
         }
     }
-    
+
     // Trovo la grandezza del file
-    struct stat * fSt = NULL;
+    struct stat * fSt = malloc(sizeof(struct stat));
     if (stat(pathname, fSt)==-1) {
         fclose(fToWrite); 
         return -1;
     }
+
     size_t fileSize = fSt->st_size;
+    free(fSt);
     // Controllo che sia nei limiti
     if(fileSize > MAX_FILE_SIZE) {
         fclose(fToWrite); 
@@ -331,40 +359,38 @@ int writeFile (const char* pathname, const char* dirname){
     }
 
     // Chiamo appendToFile per completare la scrittura
-    if (appendToFile(pathname, fToWrite, fileSize, expelledFiles)==-1) {
+    if (appendToFile(pathname, fToWrite, fileSize, expelledFiles)==-1) {    //Server torna bad file descr
         fclose(fToWrite);
         return -1;
     }
+
+    fclose(fToWrite);
     return 0;
 }
 
 int appendToFile (const char* pathname, void* buf, size_t size, const char* dirname){
-    
     //controllo validità nome
     size_t fNameLen = strlen(pathname);
-    if (fNameLen < MAX_NAME_LEN) {
+    if (fNameLen > MAX_NAME_LEN) {
         errno = ENAMETOOLONG;
         return -1;
     }
-    
-    // Controllo presenza del file
-    int openRes;
-    if((openRes=openFile(pathname, 0)) == -1) return -1;
 
     // Creo stringa di richiesta: operazione, nomeFile, size \n
-    char * opString = NULL;
-    sprintf(opString, "%d,%li,%s\n",WR,size,pathname);
+    char opString [MAX_BUF_SIZE];
+    sprintf(opString, "%d,%li,%s-0-",WR,size,pathname);
 
     //Aggiungo alla richiesta il contenuto da scrivere
     size_t nToSend = (sizeof(char) * (strlen(opString))) + size;
     void * buffer = malloc (nToSend);
     strcpy (buffer, opString);
     strcat(buffer, buf);
+    strcat(buffer, "-0-");
 
     // Invio
     void * buffRead = malloc(MAX_BUF_SIZE);
-    if (writeAndRead(buffer, &buffRead, nToSend, MAX_BUF_SIZE) ==-1) FREE_RET
-    
+    if (writeAndRead(buffer, &buffRead, nToSend, MAX_BUF_SIZE) ==-1) FREE_RET   //SMT WRONG HERE
+
     // leggo codice di risposta: Success o Failure
     int res = atoi((char *) buffRead);
     if (res == SUCCESS) SET_LO;
@@ -387,12 +413,12 @@ int removeFile (const char* pathname){
 
     int result;
     // Se la comunicazione col server è fallita riporto errore dopo aver deallocato
-    if ((result = writeAndRead(buffer, buffRead, bufferSize, MAX_BUF_SIZE))==-1) {
+    if ((result = writeAndRead(buffer, &buffRead, bufferSize, MAX_BUF_SIZE))==-1) {
         FREE_RET
     }
     // Se ha avuto successo riporto l'esito della rimozione
     else {
-        int answer = atoi((char *) buffRead);
+        int answer = getAnswer(buffRead,MAX_BUF_SIZE);
         free (buffer);
         free (buffRead);
         // Se è stato rimosso da server chiuso il file da lato client
@@ -417,33 +443,31 @@ int closeFile (const char* pathname){
 }
 
 ssize_t writeAndRead (void * bufferToWrite, void ** bufferToRead, size_t bufferSize, size_t answer){
-                
+    
     //write finchè non ho scritto tutti i byte del buffer
     size_t nToWrite = bufferSize;
-    ssize_t nWritten;
-    while ( nToWrite > 0) {
+    ssize_t nWritten=1;
+
+    while ( nToWrite > 0 && nWritten!=0) {
         if ((nWritten = write(clientSFD, bufferToWrite, nToWrite))==-1) return -1;
             nToWrite -= nWritten;
         }
 
-
     size_t nToRead = answer;
-    ssize_t nRead;
-    ssize_t totByteRead = 0;
+    ssize_t nRead=1;
+    ssize_t totBytesRead = 0;
 
     //aspetto il tempo di risposta
     sleep(msec * 0.001);
 
     //leggo la risposta del server
-    while (nToRead > 0) {
+    while (nToRead > 0 && nRead!=0) {                                 
+        if (totBytesRead!=0 && bufferCheck(bufferToRead,totBytesRead)==1) break;
         if((nRead=read(clientSFD,bufferToRead,nToRead))==-1) return -1;
-        totByteRead+=nRead;
-        if (nRead == 0) break;
-        nToRead -= nToRead;
+        totBytesRead+=nRead;
+        nToRead -= nRead;
     }
-
-    return totByteRead;
-
+    return totBytesRead;
 }
 
 int saveFile (void * buffer, const char * dirName, const char * pathname, size_t size) {
@@ -469,4 +493,17 @@ int saveFile (void * buffer, const char * dirName, const char * pathname, size_t
     if (fclose(f) == EOF) return -1;
     return 0;
 
+}
+
+int getAnswer(void ** buffer, size_t size) {
+    char * string = malloc(sizeof(char)*size);
+    memcpy(string, (char*)buffer, sizeof(char)*size);
+
+    char * toTok;
+    toTok = strtok(string,EOBUFF);
+
+    int res = atoi(toTok);
+    free (string);
+    if (res==1) return -1;
+    return res;
 }

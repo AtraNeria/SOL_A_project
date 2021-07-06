@@ -25,7 +25,7 @@ typedef struct fileNode {
     str è correntemente aperto, 0 se è stato chiuso
 */
 typedef struct strNode {
-    char * str;
+    char str [2048];
     int state;
     struct strNode * next;
 } strNode;
@@ -38,7 +38,11 @@ node * addNode (int desc);
 /* Esegue pop del primo nodo della lista List.
     Restituisce un puntatore alla nuova testa della lista
 */
-node * deleteNode(node * List);
+node * popNode(node * List);
+
+/* Elimina dalla lista il nodo contenente fd.
+*/
+void deleteNode (int fd, node ** list);
 
 /* Aggiunge un nodo puntante a file f di nome fname in coda ad una lista di elementi fileNode con fileCount elementi
 */

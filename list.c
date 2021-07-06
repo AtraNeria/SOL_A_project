@@ -1,4 +1,5 @@
 #include "list.h"
+#include "commProtocol.h"
 #include <stdlib.h>
 #include <errno.h>
 #include <string.h>
@@ -10,12 +11,29 @@ node * addNode (int desc) {
     return List;
 }
 
-node * deleteNode(node * List){
+node * popNode(node * List){
     node * toDelete =  List;
     List=List->next;
     free(toDelete);
     return List;
 }
+
+void deleteNode (int fd, node ** list){
+    if  ((*list)->descriptor==fd) *list=popNode(*list);
+    else {
+        node * previous = NULL;
+        node * current = *list;
+        while (current->descriptor!=fd && current!=NULL) {
+            previous = current;
+            current = current->next;
+        }
+        if (current!=NULL && current->descriptor==fd) {
+            previous->next=current->next;
+            free (current);
+        }
+    }
+}
+
 
 void addFile (FILE * f, long size, char * fname, int fOwner, fileNode **lastAddedFile, int * fileCount) {
     fileNode * newFile = malloc(sizeof(fileNode));
@@ -30,13 +48,15 @@ void addFile (FILE * f, long size, char * fname, int fOwner, fileNode **lastAdde
 }
 
 fileNode * searchFile (char * fname, fileNode * storage) {
-    fileNode * currFP = storage;
-    while (currFP->next!= NULL) {
-        if (strcmp(currFP->fileName, fname)==0)
-            return currFP;
-        currFP=currFP->next;
+
+    if (storage!=NULL) {
+        fileNode * currFP = storage;
+        while (currFP->next!= NULL) {
+            if (strcmp(currFP->fileName, fname)==0)
+                return currFP;
+            currFP=currFP->next;
+        }
     }
-    
     return NULL;
 }
 

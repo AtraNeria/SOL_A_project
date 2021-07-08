@@ -20,6 +20,8 @@
 #define INVALID_OPT 7
 #define NO_DIR 8
 
+#define TEST printf("OK\n");
+
 // Stampa a schermo le opzioni supportate
 void printOpt();
 
@@ -131,11 +133,12 @@ int main (int argc, char ** argv){
                 if (connOpen){
                     if (optarg!=NULL) {
                         char * args = malloc(sizeof(char)*strlen(optarg));
+                        char * saveptr;
                         strcpy(args, optarg);
-                        char * currArg = strtok(args, ",");
+                        char * currArg = strtok_r(args, ",", &saveptr);
                         if (writeFile(currArg,expelledFiles)==-1) errEx();
 
-                        while ((currArg=strtok(NULL,","))!=NULL){
+                        while ((currArg=strtok_r(NULL,",",&saveptr))!=NULL){
                             if (writeFile(currArg,expelledFiles)==-1) errEx();
                         }
                         free(args);
@@ -260,7 +263,6 @@ int main (int argc, char ** argv){
         perror("Error:");
         exit(EXIT_FAILURE);
     }
-
     return 0;
 
 }

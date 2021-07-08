@@ -45,6 +45,7 @@ int maxClients;
 node * requestsQueue=NULL;
 node * lastRequest;
 pthread_mutex_t mutex;
+pthread_cond_t newReq = PTHREAD_COND_INITIALIZER;
 
 int fileCount=0;
 fileNode * storage=NULL;
@@ -169,10 +170,10 @@ void startServer () {
             void * eventB = malloc(8);
             read (evClose, eventB, 8);
             int toClose = eventB;
-            //printf("%d\n",toClose);
             for (int i=2; i<maxFd; i++)
                 if (connectionFDS[i].fd==toClose) connectionFDS[i].fd=-1;
             deleteNode(toClose,&socketsList);
+            close(toClose);
             free(eventB);
         }
 
@@ -194,13 +195,15 @@ void startServer () {
                 currSock->next=addNode(connectionFDS[j].fd);        // per eventuale cleanup
                 currSock = currSock->next;
             }
-            else printf ("Tentata connessione\n");      //se non posso stampo un avvertimento
-            
+            //se non posso stampo un avvertimento
+            else printf ("Tentata connessione\n");
         }
         
         //Se un client già connesso ha un'altra richiesta
         for (int i=2;i<maxFd;i++){
             if (connectionFDS[i].revents==POLLIN && connectionFDS[i].fd!=-1) {
+                printf("%d\n",connectionFDS[i].fd);
+                pthread_mutex_lock(&mutex);
                 if (requestsQueue == NULL) { 
                     requestsQueue = addNode(connectionFDS[i].fd);
                     lastRequest = requestsQueue;
@@ -208,6 +211,8 @@ void startServer () {
                 else { lastRequest->next = addNode(connectionFDS[i].fd);
                     lastRequest=lastRequest->next;
                 }
+                pthread_cond_signal(&newReq);
+                pthread_mutex_unlock(&mutex);
             }
         }
     }
@@ -253,6 +258,7 @@ fileNode * initStorage(FILE * f, char * fname, int fOwner){
     list->next=NULL;
     list->prev=NULL;
     list->fPointer=f;
+    list->fileName = malloc(sizeof(char)*strlen(fname));
     strcpy(list->fileName,fname);
     lastAddedFile=list;
     return list;
@@ -261,214 +267,225 @@ fileNode * initStorage(FILE * f, char * fname, int fOwner){
 
 void * manageRequest() {
 
-    int currentRequest;     //richiesta che il thread sta servendo
+    //fd associato alla richiesta attuale
+    int currentRequest;
 
-    while(TRUE) {               //finchè accetto nuove richieste
+    //finchè accetto nuove richieste
+    while(TRUE) {               
+        
+        pthread_mutex_lock(&mutex);
+        while (requestsQueue==NULL) pthread_cond_wait(&newReq,&mutex);
+        currentRequest = requestsQueue->descriptor;
+        requestsQueue = popNode(requestsQueue);
 
-        if (requestsQueue!=NULL) {
-            pthread_mutex_lock(&mutex);
-            currentRequest = requestsQueue->descriptor;
-            popNode(requestsQueue);
+        ssize_t reqRes = 1;
+        size_t tr = MAX_BUF_SIZE+MAX_FILE_SIZE;
+        void * buffer = malloc(tr);
+        size_t totBytesR=0;
 
-            ssize_t reqRes = 1;
-            size_t tr = MAX_BUF_SIZE+MAX_FILE_SIZE;
-            void * buffer = malloc(tr);
-            size_t totBytesR=0;
-
-            while (tr>0 && reqRes!=0) {
-                if (totBytesR!=0 && bufferCheck(buffer,totBytesR)==1)
+        while (tr>0 && reqRes!=0) {
+            if (totBytesR!=0 && bufferCheck(buffer)==1)
                     break;
-                if ((reqRes=read(currentRequest, buffer, tr))==-1)
-                    errEx();
-                totBytesR+=reqRes;
-                tr-=reqRes;
-            }
-            pthread_mutex_unlock(&mutex);
+            if ((reqRes=read(currentRequest, buffer, tr))==-1)
+                errEx();
+            totBytesR+=reqRes;
+            tr-=reqRes;
+        }
+        pthread_mutex_unlock(&mutex);
 
-            //formato richiesta: codice operazione, nomeFile, eventuale file
-            char * request;
-            char * toTok=malloc(sizeof(char)*MAX_BUF_SIZE);
-            memcpy(toTok,(char *)buffer,MAX_BUF_SIZE);
-            request = strtok(toTok, ",");
+        //formato richiesta: codice operazione, nomeFile, eventuale file
+        char * request;
+        char * toTok=malloc(sizeof(char)*MAX_BUF_SIZE);
+        memcpy(toTok,(char *)buffer,MAX_BUF_SIZE);
+        request = strtok(toTok, ",");
 
-            int code = atoi(request);
-            char * reqArg;
+        int code = atoi(request);
+        char * reqArg;
 
-            switch (code) {
+        switch (code) {
 
-                // Richiesta di lettura
-                case RD:
-                    reqArg = strtok(NULL, ",");
-                    if (reqArg == NULL) sendAnswer (currentRequest, FAILURE);
+            // Richiesta di lettura
+            case RD: {
+                reqArg = strtok(NULL, ",");
+                if (reqArg == NULL) sendAnswer (currentRequest, FAILURE);
 
-                    else {
-                        pthread_mutex_lock(&mutex);
-                        fileNode * fToRd;
-                        // Controllo la presenza del file, lo invio se trovato altrimento riporto il fallimento
-                        if ((fToRd=searchFile(reqArg, storage))==NULL) sendAnswer(currentRequest, FAILURE);
-                        else if (sendFile(currentRequest, fToRd)==-1) errEx();
-                        pthread_mutex_unlock(&mutex);
-                    }
-                    break;
-                
-                // Richiesta di scrittura
-                case WR:
-                    reqArg = strtok(NULL, ",");
-                    if (reqArg == NULL) sendAnswer (currentRequest, FAILURE);
-
-                    else {
-                        pthread_mutex_lock(&mutex);
-                        char fullRequest [MAX_BUF_SIZE];
-                        strcpy(fullRequest, reqArg);
-                        strcat(fullRequest, ",");
-
-                        // Estraggo il nome
-                        char fileName [MAX_NAME_LEN];
-                        strcpy(fileName, reqArg);
-                        strcat(fullRequest, reqArg);
-                        strcat (fullRequest, ",");
-
-                        // Estraggo la taglia del file
-                        reqArg = strtok(NULL, "-0-");
-                        if (reqArg == NULL) sendAnswer (currentRequest, FAILURE);
-                        else {
-                            int fSize = atol (reqArg);
-                            strcat(fullRequest,reqArg);
-                            strcat(fullRequest,"-0-");       // Salvo in fullRequest tutta la stringa di richiesta
-
-                            // Controllo che il file sia stato creato
-                            fileNode * fToWr;
-                            if ((fToWr=searchFile(fileName, storage))==NULL) sendAnswer(currentRequest, FAILURE);
-
-                            else {
-                                // scrivo il contenuto
-                                int notContentLen = strlen(fullRequest);
-                                void * content = buffer;
-                                content += notContentLen;
-
-                                if (fToWr->fPointer==NULL) {
-                                    FILE * newF = fmemopen(NULL,fSize,"w+");
-                                    fwrite(content,sizeof(char),fSize, newF);
-                                    fToWr->fPointer=newF;
-                                    fToWr->fileSize=fSize;
-                                }
-                            }
-                        }
-                        pthread_mutex_unlock(&mutex);
-                    }
-                    break;
-                
-                // Apertura di un file
-                case OP:
-                    reqArg = strtok(NULL, ",");
-                    if (reqArg == NULL) sendAnswer (currentRequest, FAILURE);
-                    
-                    else {
-                        fileNode * fToOp;
-                        pthread_mutex_lock(&mutex);
-                        if ((fToOp=searchFile(reqArg, storage))==NULL) 
-                            sendAnswer(currentRequest, FAILURE);
-                        
-                        else sendAnswer(currentRequest, SUCCESS);
-                        pthread_mutex_unlock(&mutex);
-                    }
-                    break;
-
-                // Rimozione di un file
-                case RM:
-                    reqArg = strtok (NULL, ",");
-                    if (reqArg == NULL) sendAnswer (currentRequest, FAILURE);
-
-                    else {
-                        pthread_mutex_lock(&mutex);
-                        fileNode * fToRm;
-                        if ((fToRm=searchFile(reqArg, storage))==NULL) sendAnswer(currentRequest, FAILURE);
-                        else {
-                            deleteFile (fToRm, &storage, &lastAddedFile, &fileCount);
-                            sendAnswer(currentRequest, SUCCESS);
-                        }
-                        pthread_mutex_unlock(&mutex);
-                    }
-                    break;
-                
-                case CLS: {
-                    void * toClose =malloc(8);
-                    toClose = currentRequest;
-                    //printf("%d\n",toClose);
-                    write (evClose, toClose, 8);
-                    close(currentRequest);
-                    free(toClose);
-                    break;
-                }
-                
-                case PUC:
-                    // Creazione di un nuovo file vuoto
-                    reqArg = strtok (NULL, ",");
-                    if (reqArg == NULL) sendAnswer (currentRequest, FAILURE);
-                    else {
-                        pthread_mutex_lock(&mutex);
-                        if (storage == NULL) initStorage (NULL, reqArg, 0);
-                        else {
-                            if (searchFile(reqArg,storage) == NULL) {
-                                addFile (NULL, 0, reqArg, 0, &lastAddedFile, &fileCount);
-                                sendAnswer (currentRequest, SUCCESS);
-                            }
-                            else sendAnswer (currentRequest, FAILURE);
-                        }
-                        pthread_mutex_unlock(&mutex);
-                    }
-                    break;
-
-                case RDM:
-                    reqArg = strtok(NULL, ",");
-                    int N = atoi(reqArg);
+                else {
                     pthread_mutex_lock(&mutex);
+                    fileNode * fToRd;
+                    // Controllo la presenza del file, lo invio se trovato altrimento riporto il fallimento
+                    if ((fToRd=searchFile(reqArg, storage))==NULL) sendAnswer(currentRequest, FAILURE);
+                    else if (sendFile(currentRequest, fToRd)==-1) errEx();
+                    pthread_mutex_unlock(&mutex);
+                }
+                break;
+            }
+                
+            // Richiesta di scrittura
+            case WR: {
+                reqArg = strtok(NULL, ",");
+                if (reqArg == NULL) sendAnswer (currentRequest, FAILURE);
 
-                    fileNode * currentFile = storage;
-                    char * msg = NULL;
-                    char * fileSize = NULL;
+                else {
+                    pthread_mutex_lock(&mutex);
+                    // Salvo operazione
+                    char fullRequest [MAX_BUF_SIZE];
+                    strcpy(fullRequest, WRITE);
 
-                    // Leggo tutti i file disponibili
-                    if (N==0) {
-                        while (currentFile!=NULL) {
-                            strcpy(msg, currentFile->fileName);
-                            strcat(msg,",");
-                            sprintf(fileSize,"%li",currentFile->fileSize);
-                            strcat(msg,fileSize);
-                            strcat(msg,"\n");
-                            // Messaggio al client: nome_file,taglia_file \n contenuto
-                            if (write (currentRequest, msg, strlen(msg))==-1) break;
-                            sendFile(currentRequest,currentFile);
-                            currentFile=currentFile->next;
-                        }
+                    // Estraggo la taglia del file
+                    int fSize = atol (reqArg);
+                    strcat(fullRequest, reqArg);
+                    strcat (fullRequest, ",");              
+
+                    // Estraggo il nome del file
+                    reqArg = strtok(NULL, ",");
+                    char fileName [MAX_NAME_LEN];
+                    strcpy(fileName, reqArg);
+                    strcat(fullRequest,reqArg);
+                    strcat(fullRequest, ",");
+                    // Salvo in fullRequest tutta la stringa di richiesta: WR, size, filename       
+
+
+                    // Controllo che il file sia stato creato
+                    fileNode * fToWr;
+                    if ((fToWr=searchFile(fileName, storage)) == NULL) {
+                        sendAnswer(currentRequest, FAILURE);
                     }
-                    // Leggo N file
-                    else {
-                        int j=1;
-                        while (currentFile!=NULL && j<=N && j<=fileCount) {
-                            strcpy(msg, currentFile->fileName);
-                            strcat(msg,",");
-                            sprintf(fileSize,"%li",currentFile->fileSize);
-                            strcat(msg,fileSize);
-                            strcat(msg,"\n");
-                            // Messaggio al client: nome_file,taglia_file \n contenuto
-                            if (write (currentRequest, msg, strlen(msg))==-1) break;
-                            sendFile(currentRequest,currentFile);
-                            currentFile=currentFile->next;
-                            j++;                    
-                        }
 
+                    else {
+
+                        // scrivo il contenuto
+                        int notContentLen = strlen(fullRequest);
+                        void * content = buffer;
+                        content += notContentLen;
+                        if (fToWr->fPointer==NULL) {
+                            FILE * newF = fmemopen(NULL,fSize,"w+");
+                            fwrite(content,sizeof(char),fSize, newF);
+                            fToWr->fPointer=newF;
+                            fToWr->fileSize=fSize;
+                        }
+                        sendAnswer(currentRequest, SUCCESS);
+                   }
+                    pthread_mutex_unlock(&mutex);
+                }
+                break;
+            }
+                
+            // Apertura di un file
+            case OP: {
+                reqArg = strtok(NULL, EOBUFF);
+                if (reqArg == NULL) sendAnswer (currentRequest, FAILURE);
+                    
+                else {
+                    fileNode * fToOp;
+                    pthread_mutex_lock(&mutex);
+                    if ((fToOp=searchFile(reqArg, storage))==NULL) 
+                        sendAnswer(currentRequest, FAILURE);
+                    else sendAnswer(currentRequest, SUCCESS);
+                    pthread_mutex_unlock(&mutex);
+                }
+                break;
+            }
+
+            // Rimozione di un file
+            case RM: {
+                reqArg = strtok (NULL, ",");
+                if (reqArg == NULL) sendAnswer (currentRequest, FAILURE);
+
+                else {
+                    pthread_mutex_lock(&mutex);
+                    fileNode * fToRm;
+                    if ((fToRm=searchFile(reqArg, storage))==NULL) sendAnswer(currentRequest, FAILURE);
+                    else {
+                        deleteFile (fToRm, &storage, &lastAddedFile, &fileCount);
+                        sendAnswer(currentRequest, SUCCESS);
                     }
                     pthread_mutex_unlock(&mutex);
-                    break;
-
-                default:
-                    TEST
-                    break;
+                }
+                break;
             }
 
-        free (buffer);
+            // Chiusura di una socket client          
+            case CLS: {
+                void * toClose = currentRequest;
+                write (evClose, toClose, 8);
+                sendAnswer(currentRequest, SUCCESS);
+                break;
+            }
+
+            // Creazione di un nuovo file vuoto
+            case PUC: {
+                reqArg = strtok (NULL, EOBUFF);
+                if (reqArg == NULL) sendAnswer (currentRequest, FAILURE);
+                else {
+                    pthread_mutex_lock(&mutex);
+
+                    if (storage == NULL) {
+                        storage = initStorage (NULL, reqArg, 0);
+                        sendAnswer(currentRequest,SUCCESS);
+                    }
+                    else {
+                        if (searchFile(reqArg,storage) == NULL) {
+                            addFile (NULL, 0, reqArg, 0, &lastAddedFile, &fileCount);
+                            sendAnswer (currentRequest, SUCCESS);
+                        }
+                        else sendAnswer (currentRequest, FAILURE);
+                    }
+                    pthread_mutex_unlock(&mutex);
+                }
+                break;
+            }
+
+            // Lettura dei primi n file nello storage
+            case RDM: {
+                reqArg = strtok(NULL, ",");
+                int N = atoi(reqArg);
+                pthread_mutex_lock(&mutex);
+                
+                fileNode * currentFile = storage;
+                char * msg = NULL;
+                char * fileSize = NULL;
+
+                // Leggo tutti i file disponibili
+                if (N==0) {
+                    while (currentFile!=NULL) {
+                        strcpy(msg, currentFile->fileName);
+                        strcat(msg,",");
+                        sprintf(fileSize,"%li",currentFile->fileSize);
+                        strcat(msg,fileSize);
+                        strcat(msg,"\n");
+                        // Messaggio al client: nome_file,taglia_file \n contenuto
+                        if (write (currentRequest, msg, strlen(msg))==-1) break;
+                        sendFile(currentRequest,currentFile);
+                        currentFile=currentFile->next;
+                        }
+                }
+                // Leggo N file
+                else {
+                    int j=1;
+                    while (currentFile!=NULL && j<=N && j<=fileCount) {
+                        strcpy(msg, currentFile->fileName);
+                        strcat(msg,",");
+                        sprintf(fileSize,"%li",currentFile->fileSize);
+                        strcat(msg,fileSize);
+                        strcat(msg,"\n");
+                        // Messaggio al client: nome_file,taglia_file \n contenuto
+                        if (write (currentRequest, msg, strlen(msg))==-1) break;
+                        sendFile(currentRequest,currentFile);
+                        currentFile=currentFile->next;
+                        j++;                    
+                    }
+
+                }
+                pthread_mutex_unlock(&mutex);
+                break;
+            }
+
+            default:
+                TEST
+                break;
         }
+
+    free (buffer);    
     }
 }
 
@@ -476,8 +493,9 @@ int sendAnswer (int fd, int res) {
     size_t writeSize = sizeof(res)+sizeof(char)*strlen(EOBUFF);
     void * buff = malloc (writeSize);
 
-    if(res==SUCCESS) strcpy(buff,"0 ");
+    if (res==SUCCESS) strcpy(buff,"0 ");
     else strcpy(buff,"-1");
+
     strcat(buff, EOBUFF);
 
     ssize_t nWritten;

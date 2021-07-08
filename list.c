@@ -34,7 +34,6 @@ void deleteNode (int fd, node ** list){
     }
 }
 
-
 void addFile (FILE * f, long size, char * fname, int fOwner, fileNode **lastAddedFile, int * fileCount) {
     fileNode * newFile = malloc(sizeof(fileNode));
     newFile->owner = fOwner;
@@ -42,6 +41,7 @@ void addFile (FILE * f, long size, char * fname, int fOwner, fileNode **lastAdde
     newFile->fPointer = f;
     newFile->next = NULL;
     newFile->prev = *lastAddedFile;
+    newFile->fileName = malloc(sizeof(char)*strlen(fname));
     strcpy (newFile->fileName, fname);
     fileCount++;
     *lastAddedFile = newFile;
@@ -51,7 +51,7 @@ fileNode * searchFile (char * fname, fileNode * storage) {
 
     if (storage!=NULL) {
         fileNode * currFP = storage;
-        while (currFP->next!= NULL) {
+        while (currFP != NULL) {
             if (strcmp(currFP->fileName, fname)==0)
                 return currFP;
             currFP=currFP->next;
@@ -68,6 +68,7 @@ void deleteFile (fileNode * f, fileNode ** storage, fileNode ** lastAddedFile, i
     p->next = n;
     n->prev = p;
     fclose(f->fPointer);
+    free (f->fileName);
     free(f);
     fileCount--;
 }

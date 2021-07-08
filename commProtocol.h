@@ -35,7 +35,7 @@
 /* Controlla se i byte size di buffer sono terminati dai caratteri terminatori EOBUFF.
     Restituisce 1 se lo sono, 0 altrimenti
 */
-int bufferCheck(void * buffer, long int size);
+int bufferCheck(void * buffer);
 
 
 

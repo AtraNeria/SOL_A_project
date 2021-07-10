@@ -34,7 +34,7 @@ void deleteNode (int fd, node ** list){
     }
 }
 
-void addFile (FILE * f, long size, char * fname, int fOwner, fileNode **lastAddedFile, int * fileCount) {
+void addFile (FILE * f, long size, char * fname, int fOwner, fileNode **lastAddedFile) {
     fileNode * newFile = malloc(sizeof(fileNode));
     newFile->owner = fOwner;
     newFile->fileSize = size;
@@ -43,34 +43,50 @@ void addFile (FILE * f, long size, char * fname, int fOwner, fileNode **lastAdde
     newFile->prev = *lastAddedFile;
     newFile->fileName = malloc(sizeof(char)*strlen(fname));
     strcpy (newFile->fileName, fname);
-    fileCount++;
     *lastAddedFile = newFile;
 }
 
-fileNode * searchFile (char * fname, fileNode * storage) {
+int searchFile (char * fname, fileNode * storage, fileNode ** ptr) {
 
-    if (storage!=NULL) {
+    if (storage==NULL) {
+        return -1;}
+    else {
         fileNode * currFP = storage;
         while (currFP != NULL) {
-            if (strcmp(currFP->fileName, fname)==0)
-                return currFP;
+            if (strcmp(currFP->fileName, fname)==0) {
+                * ptr = currFP;
+                return 0;
+            }
             currFP=currFP->next;
         }
+    return -1;
     }
-    return NULL;
 }
 
-void deleteFile (fileNode * f, fileNode ** storage, fileNode ** lastAddedFile, int * fileCount) {
-    if(f == *lastAddedFile) *lastAddedFile=f->prev;
-    if(f == *storage) *storage=f->next;
-    fileNode * p = f->prev;
-    fileNode * n = f->next;
-    p->next = n;
-    n->prev = p;
-    fclose(f->fPointer);
-    free (f->fileName);
-    free(f);
-    fileCount--;
+fileNode * popFile (fileNode * list){
+    fileNode * toDelete = list;
+    list = list->next;
+    free(toDelete);
+    return list;
+}
+
+void deleteFile (fileNode * f, fileNode ** storage, fileNode ** lastAddedFile) {
+
+
+        if(f == *lastAddedFile) *lastAddedFile=f->prev;
+        if(f == *storage) *storage=f->next;
+
+        fileNode * p = f->prev;
+        fileNode * n = f->next;
+
+        // Non è in testa
+        if (p != NULL) p->next = n;
+        // Non è in coda
+        if (n != NULL) n->prev = p;
+        
+        fclose(f->fPointer);
+        free (f->fileName);
+        free(f);
 }
 
 strNode * addString (const char * string, strNode * list) {
@@ -79,7 +95,6 @@ strNode * addString (const char * string, strNode * list) {
         errno = EEXIST;
         return NULL;
     }
-
     strNode * newNode = malloc(sizeof(strNode));
     strcpy(newNode->str,string);
     newNode->state=1;
@@ -129,9 +144,11 @@ int deleteString (const char * string, strNode ** list) {
 }
 
 int searchString(const char * string, strNode * list) {
+
     strNode * curr = list;
     while (curr != NULL) {
         if (strcmp(string,curr->str)==0) return curr->state;
+        curr=curr->next;
     }
     return -1;
 }

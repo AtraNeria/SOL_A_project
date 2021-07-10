@@ -44,19 +44,24 @@ node * popNode(node * List);
 */
 void deleteNode (int fd, node ** list);
 
-/* Aggiunge un nodo puntante a file f di nome fname in coda ad una lista di elementi fileNode con fileCount elementi
+/* Aggiunge un nodo puntante a file f di nome fname in coda ad una lista di elementi fileNode
 */
-void addFile (FILE * f, long size, char * fname, int fOwner, fileNode **lastAddedFile, int * fileCount);
+void addFile (FILE * f, long size, char * fname, int fOwner, fileNode **lastAddedFile);
 
-/* Cerca il nodo con nome fname nella lista storage
-    restituisce il puntatore al file cercato se presente, NULL altimenti
+/* Cerca il nodo con nome fname nella lista storage, salvandone il puntatore in ptr se trovato.
+    Restituisce 0 in caso di successo, -1 altrimenti
 */
-fileNode * searchFile (char * fname, fileNode * storage);
+int searchFile (char * fname, fileNode * storage, fileNode ** ptr);
+
+/* Elimina dalla lista list il nodo file in testa.
+    Restituisce la nuova testa della lista
+*/
+fileNode * popFile (fileNode * list);
 
 /* Prende una lista di fileNode storage, la sua coda lastAddedFile, il suo numero di elementi fileCount
     e elimina da essa il nodo f. 
 */
-void deleteFile (fileNode * f, fileNode ** storage, fileNode **lastAddedFile, int * fileCount);
+void deleteFile (fileNode * f, fileNode ** storage, fileNode **lastAddedFile);
 
 /* Aggiunge in testa alla lista list un elemento contenente la stringa string, se non esiste già
     un elemento tale.

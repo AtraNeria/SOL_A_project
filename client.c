@@ -10,6 +10,7 @@
 #include "client_api.h"
 
 #define MAX_NAME_LEN 2048
+#define MAX_FILE_SIZE 262144
 
 #define DFLT_TIME 0
 
@@ -136,9 +137,9 @@ int main (int argc, char ** argv){
                         char * saveptr;
                         strcpy(args, optarg);
                         char * currArg = strtok_r(args, ",", &saveptr);
-                        if (writeFile(currArg,expelledFiles)==-1) errEx();
 
-                        while ((currArg=strtok_r(NULL,",",&saveptr))!=NULL){
+                        if (writeFile(currArg,expelledFiles)==-1) errEx();
+                        while ((currArg = strtok_r(NULL,", ", &saveptr))!=NULL){
                             if (writeFile(currArg,expelledFiles)==-1) errEx();
                         }
                         free(args);
@@ -158,15 +159,12 @@ int main (int argc, char ** argv){
                         char * rArgs = malloc(sizeof(char)*strlen(optarg));
                         strcpy(rArgs, optarg);
                         char * fToRead = strtok(rArgs,",");
-                        void ** buffer=NULL;
-                        size_t * bufferSize=NULL;
-                        if (readFile(fToRead, buffer, bufferSize)==-1) errEx();
-
+                        void * buffer= malloc(MAX_FILE_SIZE);
+                        size_t bufferSize;
+                        if (readFile(fToRead, &buffer, &bufferSize)==-1) errEx();
                         while ((fToRead = strtok(NULL, ","))!=NULL) {
-                            if (readFile(fToRead, buffer, bufferSize)==-1) errEx();
+                            if (readFile(fToRead, &buffer, &bufferSize)==-1) errEx();
                         }
-                        
-                        optarg=NULL;
                         free(rArgs);
                     }
 
@@ -258,7 +256,6 @@ int main (int argc, char ** argv){
     }
 
     cleanup();
-
     if (closeConnection(sockName)==-1) { 
         perror("Error:");
         exit(EXIT_FAILURE);
@@ -297,8 +294,7 @@ void printWarning(int warno) {
             break;
 
         case T_REPEAT:
-            printf("Verrà considerato valido il valore specificato \
-                                nella prima occorrenza di -t\n"); 
+            printf("Verrà considerato valido il valore specificato nella prima occorrenza di -t\n"); 
             break;
 
         case NO_ARG:
@@ -310,7 +306,7 @@ void printWarning(int warno) {
             break;
         
         case NO_DIR:
-            printf("Directory non specificata con opzione -d");
+            printf("Directory non specificata con opzione -d: i file letti non verrano salvati su disco");
             break;
 
     }

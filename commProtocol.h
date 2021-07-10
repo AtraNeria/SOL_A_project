@@ -20,7 +20,8 @@
 #define RD_MUL "1024,"      // Lettura di molteplici file
 
 #define TEST printf("OK\n");
-#define EOBUFF "-0-"
+#define EOBUFF "£"
+#define EOB_SIZE sizeof(char)*strlen(EOBUFF)
 
 // Grandezze supportate
 #define MAX_BUF_SIZE 4096
@@ -37,6 +38,9 @@
 */
 int bufferCheck(void * buffer);
 
-
+/* Estrae il nome di un file dal suo percordo in fullpath, salvandolo in name.
+    Restituisce 0 in caso di successo, -1 altrimenti
+*/
+int nameFromPath (char * fullpath, char ** name);
 
 #endif

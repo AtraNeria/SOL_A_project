@@ -91,10 +91,12 @@ int openConnection (const char* sockname, int msec, const struct timespec abstim
 }
 
 int closeConnection (const char* sockname) {
-    int res;
 
+    int res;
     // Richiesta al server
-    char * closeReq ="256,-0-";
+    char * closeReq = malloc(sizeof(char)* MAX_BUF_SIZE);
+    strcpy(closeReq, CLOSE_S);
+
     size_t writeSize = sizeof(char)*strlen(closeReq);
     void * buffer = malloc (writeSize);
     strcpy (buffer,closeReq);
@@ -103,7 +105,8 @@ int closeConnection (const char* sockname) {
     // Invio richiesta e chiusura locale
     int sr = writeAndRead(buffer,&buffRead,writeSize,MAX_BUF_SIZE);
     res = (sr && close(clientSFD));
-    free(buffer);
+    free (buffer);
+    free (closeReq);
     //free(buffRead);                     // SEG FAULT
     return res;
 }
@@ -125,11 +128,10 @@ int openFile (const char* pathname, int flags){
 
             // creo un file
             case O_CREATE:
-                nToWrite = sizeof(char)*(strlen(PUB_CREATE)+fNameLen+strlen(EOBUFF));  //buffer da inviare a server
+                nToWrite = sizeof(char)*(strlen(PUB_CREATE)+fNameLen);  //buffer da inviare a server
                 buffer = malloc(nToWrite);
                 strcpy (buffer, PUB_CREATE);
                 strcat (buffer,pathname);
-                strcat (buffer, EOBUFF);
                 if (writeAndRead(buffer, &buffRead, nToWrite, MAX_BUF_SIZE)==-1) FREE_RET;
                 break;
 
@@ -162,11 +164,10 @@ int openFile (const char* pathname, int flags){
 
     // apro un file
     else {
-        nToWrite = sizeof(char)*(strlen(OPEN)+strlen(pathname)+strlen(EOBUFF));
+        nToWrite = sizeof(char)*(strlen(OPEN)+strlen(pathname));
         buffer = malloc(nToWrite);
         strcpy (buffer, OPEN);
         strcat (buffer,pathname);
-        strcat (buffer,EOBUFF);
         if (writeAndRead(buffer,&buffRead, nToWrite, MAX_BUF_SIZE)==-1) FREE_RET;
     }
 
@@ -216,27 +217,32 @@ int readFile (const char * pathname, void ** buf, size_t* size) {
     //Invio richiesta
     result = writeAndRead(buffer, buf, nToWrite, MAX_FILE_SIZE);
     SET_LO;
-    
-    //Se ho avuto successo salvo il file nella cartella specificata per i file letti se specificata
+
+    //Se ho avuto successo salvo il file nella cartella specificata (se lo è stata) per i file letti
     if (result!=-1 && dirReadFiles!=NULL) {
-        if (saveFile(buffer, NULL, pathname, MAX_FILE_SIZE)==-1) {
+        if (saveFile(buffer, dirReadFiles, pathname, MAX_FILE_SIZE)==-1) {
             free (buffer);
             return -1;
-        }        
+        }
     }
     free (buffer);
-    return result;
+    *size = result;
+    return 0;
 }
 
 int readNFiles (int N, const char* dirname) {
 
     // Inserisco N nella stringa di richiesta
+    // RDM,N£
+
     char nF [32];
     sprintf (nF,"%d",N);
-    size_t writeSize = sizeof(char)*(strlen(RD_MUL)+strlen(nF));
+    size_t writeSize = sizeof(char)*(strlen(RD_MUL)+strlen(nF)+strlen(EOBUFF));
     void * buffer = malloc (writeSize);
     strcpy (buffer, RD_MUL);
     strcat (buffer, nF);
+    strcat (buffer, EOBUFF);
+    printf("%s\n",(char *)buffer);
 
     size_t readS = MAX_BUF_SIZE+MAX_FILE_SIZE;
     void * buffRead = malloc (readS);
@@ -308,7 +314,6 @@ int readNFiles (int N, const char* dirname) {
 
 int writeFile (const char* pathname, const char* dirname){
 
-    printf("%s\n",pathname);
     // Controllo lunghezza nome
     size_t fNameLen = strlen(pathname);
     if (fNameLen > MAX_NAME_LEN) {
@@ -361,7 +366,7 @@ int writeFile (const char* pathname, const char* dirname){
     }
 
     // Chiamo appendToFile per completare la scrittura
-    if (appendToFile(pathname, fToWrite, fileSize, expelledFiles)==-1) {            //HERE
+    if (appendToFile(pathname, fToWrite, fileSize, expelledFiles)==-1) {
         fclose(fToWrite);
         return -1;
     }
@@ -371,6 +376,7 @@ int writeFile (const char* pathname, const char* dirname){
 }
 
 int appendToFile (const char* pathname, void* buf, size_t size, const char* dirname){
+
     //controllo validità nome
     size_t fNameLen = strlen(pathname);
     if (fNameLen > MAX_NAME_LEN) {
@@ -378,26 +384,29 @@ int appendToFile (const char* pathname, void* buf, size_t size, const char* dirn
         return -1;
     }
 
-    // Creo stringa di richiesta: operazione, size, nomefile \n
+    // Creo stringa di richiesta: operazione, size, nomefile
     char opString [MAX_BUF_SIZE];
     sprintf(opString, "%d,%li,%s,",WR,size,pathname);
 
-    //Aggiungo alla richiesta il contenuto da scrivere
-    size_t nToSend = (sizeof(char) * (strlen(opString))) + size;
-    void * buffer = malloc (nToSend);
+    // Invio header richiesta
+    size_t nToWrite = sizeof(char)*strlen(opString);
+    ssize_t nWritten = 1;
+    while ( nToWrite > 0 && nWritten!=0) {
+        if ((nWritten = write(clientSFD, opString, nToWrite))==-1) return -1;
+            nToWrite -= nWritten;
+    }
+    write(clientSFD,EOBUFF,EOB_SIZE);
 
-    strcpy (buffer, opString);
-    strcat(buffer, buf);
-    strcat(buffer, EOBUFF);
-
-    // Invio
+    // Invio file
     void * buffRead = malloc(MAX_BUF_SIZE);
-    if (writeAndRead(buffer, &buffRead, nToSend, MAX_BUF_SIZE) ==-1) FREE_RET
+    if (writeAndRead(buf, &buffRead, size, MAX_BUF_SIZE) ==-1) {
+        free(buffRead);
+        return -1;
+    }
 
     // leggo codice di risposta: Success o Failure
     int res = getAnswer(&buffRead,MAX_BUF_SIZE);
 
-    free (buffer);
     //free (buffRead);      //SEG FAULT
     return res;
 }
@@ -416,21 +425,24 @@ int removeFile (const char* pathname){
     void * buffer = malloc(bufferSize);
     void * buffRead = malloc(MAX_BUF_SIZE);
 
+    strcpy (buffer, RMV);
+    strcat (buffer, pathname);
     int result;
     // Se la comunicazione col server è fallita riporto errore dopo aver deallocato
     if ((result = writeAndRead(buffer, &buffRead, bufferSize, MAX_BUF_SIZE))==-1) {
         FREE_RET
     }
+
     // Se ha avuto successo riporto l'esito della rimozione
     else {
-        int answer = getAnswer(buffRead,MAX_BUF_SIZE);
+        int answer = getAnswer(&buffRead,MAX_BUF_SIZE);
         free (buffer);
-        free (buffRead);
-        // Se è stato rimosso da server chiuso il file da lato client
-        if (answer == SUCCESS) closeFile (pathname);
+        //free (buffRead);  //SEG FAULT
+        // Se è stato rimosso da server chiudo il file da lato client
+        if (answer == SUCCESS) {
+            closeFile (pathname);}
         return answer;
     }
-    
     
 }
 
@@ -457,6 +469,7 @@ ssize_t writeAndRead (void * bufferToWrite, void ** bufferToRead, size_t bufferS
         if ((nWritten = write(clientSFD, bufferToWrite, nToWrite))==-1) return -1;
             nToWrite -= nWritten;
         }
+    write(clientSFD,EOBUFF,EOB_SIZE);
 
     size_t nToRead = answer;
     ssize_t nRead = 1;
@@ -466,37 +479,39 @@ ssize_t writeAndRead (void * bufferToWrite, void ** bufferToRead, size_t bufferS
     sleep(msec * 0.001);
 
     //leggo la risposta del server
-    while (nToRead > 0 && nRead!=0) {                           
-        if (totBytesRead!=0 && bufferCheck(&bufferToRead)==1) break;
+    while (nToRead > 0 && nRead!=0) {
+        if (totBytesRead!=0 && bufferCheck(bufferToRead)==1) break;
         if ((nRead = read(clientSFD,bufferToRead,nToRead)==-1)) return -1;
-        totBytesRead+=nRead;
+        totBytesRead += nRead;
         nToRead -= nRead;
     }
+
     return totBytesRead;
 }
 
 int saveFile (void * buffer, const char * dirName, const char * pathname, size_t size) {
 
-    //Apro file e se non esiste lo creo
-    char * fpath=NULL;
-    // Se non è specificata una cartella uso quella per i file letti
-    if(dirName == NULL) {
-        strcpy(fpath, dirReadFiles);
-        strcat(fpath,"/");
-        strcat(fpath,pathname);
-    }
-    else {
-        strcpy(fpath, dirName);
-        strcat(fpath,"/");
-        strcat(fpath,pathname);
-    }
+    // Estraggo solo il nome da un eventuale percorso con cui è stato nominato dal server
+    char * fpath=malloc(sizeof(char)*MAX_NAME_LEN);
+    char * temp = malloc(sizeof(char)*MAX_NAME_LEN);
+    strcpy(temp, pathname);
+    nameFromPath (temp, &temp);
+
+    // Salvo il path ./directory/filename
+    strcpy(fpath, dirName);
+    strcat(fpath,"/");
+    strcat(fpath,temp);
+
+    // Salvo il file aprendolo in creazione
     FILE * f;
     if ((f = fopen(fpath, "w+"))==NULL) return -1;
 
     // Copio il contenuto del buffer
     fwrite(buffer, sizeof(char), size, f);
-    if (fclose(f) == EOF) return -1;
-    return 0;
+    free (fpath);
+    free (temp);
+    if (fclose(f) == 0) return 0;
+    return -1;
 
 }
 

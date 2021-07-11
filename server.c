@@ -169,11 +169,11 @@ void startServer () {
         if (connectionFDS[1].revents == POLLIN) {
             void * eventB = malloc(8);
             read (evClose, eventB, 8);
-            int toClose = eventB;
+            int * toClose = eventB;
             for (int i=2; i<maxFd; i++)
-                if (connectionFDS[i].fd==toClose) connectionFDS[i].fd=-1;
-            deleteNode(toClose,&socketsList);
-            close(toClose);
+                if (connectionFDS[i].fd==*toClose) connectionFDS[i].fd=-1;
+            deleteNode(*toClose,&socketsList);
+            close(*toClose);
             free(eventB);
         }
 
@@ -271,14 +271,14 @@ void * manageRequest() {
 
     //finchè accetto nuove richieste
     while(TRUE) {               
-        
+
         pthread_mutex_lock(&mutex);
         while (requestsQueue==NULL) pthread_cond_wait(&newReq,&mutex);
         currentRequest = requestsQueue->descriptor;
         requestsQueue = popNode(requestsQueue);
 
         ssize_t reqRes = 1;
-        size_t tr = MAX_BUF_SIZE+MAX_FILE_SIZE;
+        size_t tr = MAX_BUF_SIZE;
         void * buffer = malloc(tr);
         size_t totBytesR=0;
 
@@ -290,16 +290,23 @@ void * manageRequest() {
             totBytesR+=reqRes;
             tr-=reqRes;
         }
+
+        // Creo una copia del buffer per tokenizzare
+        char * tk = malloc(sizeof(char)*MAX_BUF_SIZE);
+        memcpy (tk,(char *)buffer,MAX_BUF_SIZE);
+        
+        // Tolgo il terminatore dalla richiesta, formato: codiceOp,nomeFile,Contenuto
+        char * request;
+        request = strtok(tk,EOBUFF);
+
+        // Tokenizzo il codice
+        char * opCode = strtok (request, ",");
+        int code = atoi(opCode);
         pthread_mutex_unlock(&mutex);
 
-        //formato richiesta: codice operazione, nomeFile, eventuale file
-        char * request;
-        char * toTok=malloc(sizeof(char)*MAX_BUF_SIZE);
-        memcpy(toTok,(char *)buffer,MAX_BUF_SIZE);
-        request = strtok(toTok, ",");
-
-        int code = atoi(request);
+        printf("%d %s\n",code,request);
         char * reqArg;
+
         switch (code) {
 
             // Richiesta di lettura
@@ -328,7 +335,7 @@ void * manageRequest() {
                     // Salvo richiesta completa
                     char fullRequest [MAX_BUF_SIZE];
                     strcpy(fullRequest, WRITE);
-                    strcat(fullRequest,reqArg);
+                    strcat(fullRequest, reqArg);
                     int reqLen = strlen(fullRequest);
 
                     // Ne faccio una copia da tokenizzate
@@ -352,17 +359,46 @@ void * manageRequest() {
                     }
 
                     else {
-                        // scrivo il contenuto
-                        void * content = buffer;
-                        content += reqLen;
-                        if (fToWr->fPointer==NULL) {
-                            FILE * newF = fmemopen(NULL,fSize,"w+");
-                            fwrite(content,sizeof(char),fSize, newF);
-                            fToWr->fPointer=newF;
-                            fToWr->fileSize=fSize;
+                        // Scrivo il contenuto eventualmente letto nel buffer precedente
+                        void * buff2 = malloc(MAX_BUF_SIZE);
+                        void * toFree = buff2;
+                        memcpy (buff2,buffer,MAX_BUF_SIZE);
+                        buff2 += reqLen;
+                        void * content = malloc(fSize);
+                        size_t partialDataLen = MAX_BUF_SIZE-sizeof(char)*reqLen;
+                        memcpy (content, buff2, partialDataLen);
+                        
+                        // Leggo il restante contenuto
+                        size_t dataToRd = fSize - partialDataLen;
+                        size_t readRes = 1;
+                        size_t totDataBytesR = 0;
+                        while (dataToRd>0 && readRes!=0) {
+                            if (totDataBytesR!=0 && bufferCheck(content)==1) break;
+                            if ((readRes=read(currentRequest, content, dataToRd))== -1) break;
+                            totDataBytesR += readRes;
+                            dataToRd -= readRes;
                         }
-                        sendAnswer(currentRequest, SUCCESS);
-                   }
+
+                        // Se ho riscontrato problemi nella lettura indico la client di aver fallito
+                        if (readRes == -1) {
+                            free(content);
+                            free(toFree);
+                            sendAnswer(currentRequest, FAILURE);
+                        }
+
+                        // Altrimenti salvo il file e segnalo l'azione avvenuta con successo
+                        else {
+                            if (fToWr->fPointer==NULL) {
+                                FILE * newF = fmemopen(NULL,fSize,"w+");
+                                fwrite(content,sizeof(char),fSize, newF);
+                                fToWr->fPointer=newF;
+                                fToWr->fileSize=fSize;
+                            }
+                            free(content);
+                            free(toFree);
+                            sendAnswer(currentRequest, SUCCESS);
+                        }
+                    }
                     pthread_mutex_unlock(&mutex);
                 }
                 break;
@@ -406,9 +442,9 @@ void * manageRequest() {
 
             // Chiusura di una socket client          
             case CLS: {
-                void * toClose = currentRequest;
-                write (evClose, toClose, 8);
+                void * toClose = &currentRequest;
                 sendAnswer(currentRequest, SUCCESS);
+                write (evClose, toClose, 8);
                 break;
             }
 
@@ -449,37 +485,35 @@ void * manageRequest() {
             case RDM: {
                 reqArg = strtok(NULL, EOBUFF);
                 int N = atoi(reqArg);
+
                 pthread_mutex_lock(&mutex);
-                
                 fileNode * currentFile = storage;
                 char * msg = NULL;
-                char * fileSize = NULL;
 
                 // Leggo tutti i file disponibili
                 if (N==0) {
                     while (currentFile!=NULL) {
-                        strcpy(msg, currentFile->fileName);
-                        strcat(msg,",");
-                        sprintf(fileSize,"%li",currentFile->fileSize);
-                        strcat(msg,fileSize);
-                        strcat(msg, EOBUFF);
+
                         // Messaggio al client: nome_file,taglia_file£ contenuto
+                        sprintf(msg,"%s,%li,",currentFile->fileName, currentFile->fileSize);
+
                         if (write (currentRequest, msg, strlen(msg))==-1) break;
+                        write (currentRequest, EOBUFF, EOB_SIZE);
+
                         sendFile(currentRequest,currentFile);
                         currentFile=currentFile->next;
                         }
                 }
+
                 // Leggo N file
                 else {
                     int j=1;
                     while (currentFile!=NULL && j<=N && j<=fileCount) {
-                        strcpy(msg, currentFile->fileName);
-                        strcat(msg,",");
-                        sprintf(fileSize,"%li",currentFile->fileSize);
-                        strcat(msg,fileSize);
-                        strcat(msg,EOBUFF);
-                        // Messaggio al client: nome_file,taglia_file£ contenuto
+                        sprintf(msg,"%s,%li,",currentFile->fileName, currentFile->fileSize);
+
                         if (write (currentRequest, msg, strlen(msg))==-1) break;
+                        write (currentRequest, EOBUFF, EOB_SIZE);
+
                         sendFile(currentRequest,currentFile);
                         currentFile=currentFile->next;
                         j++;                    
@@ -494,8 +528,8 @@ void * manageRequest() {
                 TEST
                 break;
         }
-
-    free (buffer);    
+    //free (buffer);
+    //free (tk);
     }
 }
 

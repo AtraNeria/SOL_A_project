@@ -237,15 +237,14 @@ int readNFiles (int N, const char* dirname) {
 
     char nF [32];
     sprintf (nF,"%d",N);
-    size_t writeSize = sizeof(char)*(strlen(RD_MUL)+strlen(nF)+strlen(EOBUFF));
+    size_t writeSize = sizeof(char)*(strlen(RD_MUL)+strlen(nF));
     void * buffer = malloc (writeSize);
     strcpy (buffer, RD_MUL);
     strcat (buffer, nF);
-    strcat (buffer, EOBUFF);
     printf("%s\n",(char *)buffer);
 
-    size_t readS = MAX_BUF_SIZE+MAX_FILE_SIZE;
-    void * buffRead = malloc (readS);
+    void * buffRead = malloc (MAX_BUF_SIZE);
+    void * toFree = buffRead;
 
     // Invio richiesta al server
     size_t nToWrite = writeSize;
@@ -266,41 +265,64 @@ int readNFiles (int N, const char* dirname) {
         char infoIndex[MAX_BUF_SIZE]; // header completo
         char pathName[MAX_NAME_LEN];  // nome file
 
-        // Leggo il primo file e lo carico in un buffer void*
-        size_t nToRd=readS;
-        ssize_t nRead;
-        while (nToRd>0) {
-            if ((nRead=read(clientSFD,buffRead,readS))==-1) FREE_RET
-            if (nRead == 0) break;
+
+        // Leggo header sul file
+        size_t nToRd = MAX_BUF_SIZE;
+        ssize_t nRead = 1;
+        size_t totBytes = 0;
+        while (nToRd>0 && nRead!=0) {
+            if (totBytes!=0 && bufferCheck(buffRead)==0) break;
+            if ((nRead=read(clientSFD,buffRead,nToRd))==-1) {
+                free(buffer);
+                free(toFree);
+                return -1;
+            }
             nToRd-=nRead;
+            totBytes +=nRead;
         }
 
         // Estraggo il nome da buffer
         tk = strtok(buffRead,",");
         strcpy(pathName, tk);
 
-        strcpy(infoIndex,tk);
-        strcat(infoIndex,",");
-
         // Estraggo la taglia
-        tk = strtok(NULL,"\n");
+        tk = strtok(NULL, EOBUFF);
         fileSize = atol(tk);
 
-        strcat(infoIndex,tk);
-        strcat(infoIndex,"\n");
-
+        sprintf(infoIndex,"%s,%li,£",pathName,fileSize);
 
         // Sposto il puntatore a inizio contenuto file
         buffRead+=strlen(infoIndex);
-        // Salvo il file
-        saveFile(buffRead, dirname, pathName, fileSize);
 
+        // Salvo i dati parziali dal puntatore
+        void * content = malloc (fileSize);
+        size_t partDataLen = MAX_BUF_SIZE - strlen(infoIndex);
+        memcpy(content,buffRead,partDataLen);
+
+        // Leggo il resto del file
+        nToRd = fileSize - partDataLen;
+        nRead = 1;
+        totBytes = 0;
+        while (nToRd>0 && nRead!=0) {
+            if (totBytes!=0 && bufferCheck(content)==0) break;
+            if ((nRead=read(clientSFD,content,nToRd))==-1) {
+                free(buffer);
+                free(toFree);
+                free(content);
+                return -1;
+            }
+            nToRd-=nRead;
+            totBytes +=nRead;
+        }
+
+        if (dirname!=NULL) saveFile(content, dirname, pathName, fileSize);
+        free (content);
         j++;
 
     } 
 
     free (buffer);
-    free (buffRead);
+    free (toFree);
 
     // Errore se il server è vuoto e non ha passato nulla
     if (j==1 && j<=N && buffRead==NULL) {
@@ -313,6 +335,8 @@ int readNFiles (int N, const char* dirname) {
 }
 
 int writeFile (const char* pathname, const char* dirname){
+
+    printf("%s\n",pathname);
 
     // Controllo lunghezza nome
     size_t fNameLen = strlen(pathname);
@@ -386,7 +410,8 @@ int appendToFile (const char* pathname, void* buf, size_t size, const char* dirn
 
     // Creo stringa di richiesta: operazione, size, nomefile
     char opString [MAX_BUF_SIZE];
-    sprintf(opString, "%d,%li,%s,",WR,size,pathname);
+    sprintf(opString, "%d,%li,%s",WR,size,pathname);
+    printf("%s\n",opString);
 
     // Invio header richiesta
     size_t nToWrite = sizeof(char)*strlen(opString);

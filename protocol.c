@@ -1,12 +1,19 @@
 #include "commProtocol.h"
 #include <string.h>
+#include <stdlib.h>
 
 int bufferCheck(void * buffer){
-    char b [MAX_BUF_SIZE];
-    strcpy(b,buffer);
+    char * b = malloc(sizeof(char)*MAX_FILE_SIZE);
+    //memset (b, 0, sizeof(char)*MAX_FILE_SIZE);
+    strcpy (b, (char *) buffer);
 
-    if (strstr(b,EOBUFF)==NULL) return 0;
-    else return 1;
+    if (strstr(b, EOBUFF)==NULL) {
+        free(b);
+        return 0;}
+    else {
+        free (b);
+        return 1;
+    }
 }
 
 int nameFromPath (char * fullpath, char ** name) {

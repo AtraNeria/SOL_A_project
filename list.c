@@ -41,7 +41,7 @@ void addFile (FILE * f, long size, char * fname, int fOwner, fileNode **lastAdde
     newFile->fPointer = f;
     newFile->next = NULL;
     newFile->prev = *lastAddedFile;
-    newFile->fileName = malloc(sizeof(char)*strlen(fname));
+    newFile->fileName = malloc(sizeof(char)*(strlen(fname)+1));
     strcpy (newFile->fileName, fname);
     *lastAddedFile = newFile;
 }

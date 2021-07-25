@@ -274,7 +274,6 @@ void printOpt(){
             -u file1[,file2]\n-c file1[,file2]\n-p" );
 }
 
-
 void timeCheck (int argc, char ** argv){
     int t_opt;
 

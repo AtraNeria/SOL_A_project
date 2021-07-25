@@ -371,7 +371,7 @@ int writeFile (const char* pathname, const char* dirname){
     }
 
     // Richiesta apertura file al server
-    int res = openFile(pathname, 0);
+    int res = openFile(pathname, 0);        // res è -1 ma errno è 104 dopo
 
     if (res == -1) {
         if (errno==ENOENT) { 

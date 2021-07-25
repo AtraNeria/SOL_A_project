@@ -6,6 +6,7 @@
 
 node * addNode (int desc) {
     node * List = malloc(sizeof(node));
+    memset (List, 0, sizeof(node));
     List->descriptor = desc;
     List->next =NULL;
     return List;

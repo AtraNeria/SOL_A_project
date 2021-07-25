@@ -183,7 +183,7 @@ void startServer () {
         //Controllo se ci sono altre richieste
         if ((pollRes = poll(connectionFDS,maxFd,timeout))==-1)
             errEx();
-        if (pollRes==0) {
+        if (pollRes == 0) {
             printf("Sessione scaduta\n");
             //no clients connected atm
         }
@@ -193,9 +193,9 @@ void startServer () {
             int j = 2;
             while(connectionFDS[j].fd!=-1 && j<maxFd) j++; 
             //controllo se ho spazio per gestire più client
-            if (j<=maxFd) { 
+            if (j<=maxFd) {
                 connectionFDS[j].fd = accept (serverSFD, NULL, 0);  //se posso accetto connessione
-                currSock->next=addNode(connectionFDS[j].fd);        // per eventuale cleanup
+                currSock->next = addNode(connectionFDS[j].fd);        // per eventuale cleanup
                 currSock = currSock->next;
             }
             //se non posso stampo un avvertimento
@@ -207,10 +207,11 @@ void startServer () {
             if (connectionFDS[i].revents==POLLIN && connectionFDS[i].fd!=-1) {
                 pthread_mutex_lock(&mutex);
                 if (requestsQueue == NULL) { 
+                    // TEST: non inserisce nodo dopo write???? UPDATE: Sembra inserire correttamente
                     requestsQueue = addNode(connectionFDS[i].fd);
                     lastRequest = requestsQueue;
                 }
-                else { lastRequest->next = addNode(connectionFDS[i].fd);
+                else {lastRequest->next = addNode(connectionFDS[i].fd);
                     lastRequest=lastRequest->next;
                 }
                 pthread_cond_signal(&newReq);
@@ -273,18 +274,19 @@ void * manageRequest() {
     int currentRequest;
 
     //finchè accetto nuove richieste
-    while(TRUE) {               
+    while(TRUE) {
 
         pthread_mutex_lock(&mutex);
         while (requestsQueue==NULL) pthread_cond_wait(&newReq,&mutex);
         currentRequest = requestsQueue->descriptor;
-        requestsQueue = popNode(requestsQueue);
+        printf("%d\n",currentRequest);                  //TEST : 5, 0 dopo write
+        requestsQueue = popNode(requestsQueue);       // FREE invalid pointer after write
 
         ssize_t reqRes = 1;
         size_t tr = MAX_BUF_SIZE;
         void * buffer = malloc(tr);
-        memset (buffer, 0, tr);
         void * toFree = buffer;
+        memset (buffer, 0, tr);
         size_t totBytesR=0;
 
         while (tr>0 && reqRes!=0) {
@@ -365,10 +367,9 @@ void * manageRequest() {
                     }
 
                     else {
-
                         // Scrivo il contenuto eventualmente letto nel buffer precedente
                         void * buff2 = malloc(MAX_BUF_SIZE);
-                        memset (buff2, 0, MAX_BUF_SIZE);        //TEST
+                        memset (buff2, 0, MAX_BUF_SIZE);
                         void * toFree = buff2;
                         memcpy (buff2,buffer,MAX_BUF_SIZE);
                         buff2 += reqLen;
@@ -405,7 +406,7 @@ void * manageRequest() {
                         }
 
                         // Altrimenti salvo il file e segnalo l'azione avvenuta con successo
-                        //else {
+                        else {
                             if (fToWr->fPointer==NULL) {
                                 FILE * newF = fmemopen(NULL,fSize,"w+");
                                 fwrite(content,sizeof(char),fSize, newF);
@@ -416,7 +417,7 @@ void * manageRequest() {
                             free(toFree);
                             sendAnswer(currentRequest, SUCCESS);
                         }
-                    //}
+                    }
                     pthread_mutex_unlock(&mutex);
                 }
                 break;
@@ -482,8 +483,8 @@ void * manageRequest() {
                 else {
                     if (storage == NULL) {
                         storage = initStorage (NULL, reqArg, 0);
-                        sendAnswer(currentRequest,SUCCESS);
                         fileCount++;
+                        sendAnswer(currentRequest,SUCCESS);
                     }
                     else {
                         fileNode * toCr;

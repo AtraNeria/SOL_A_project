@@ -94,14 +94,16 @@ int closeConnection (const char* sockname) {
 
     int res;
     // Richiesta al server
-    char * closeReq = malloc(sizeof(char)* MAX_BUF_SIZE);
+    char * closeReq = calloc(MAX_BUF_SIZE,sizeof(char));
     strcpy(closeReq, CLOSE_S);
 
     size_t writeSize = sizeof(char)*strlen(closeReq);
     void * buffer = malloc (writeSize);
+    memset (buffer, 0, writeSize);
     void * toFreeWrite = buffer;
     strcpy (buffer,closeReq);
     void * buffRead = malloc(MAX_BUF_SIZE);
+    memset (buffRead, 0, MAX_BUF_SIZE);
     void * toFree = buffRead;
 
     // Invio richiesta e chiusura locale
@@ -124,6 +126,7 @@ int openFile (const char* pathname, int flags){
     void * buffer;
     void * toFreeWrite;
     void * buffRead = malloc(MAX_BUF_SIZE); 
+    memset (buffRead, 0, MAX_BUF_SIZE);
     void * toFree = buffRead;
     size_t nToWrite;
 
@@ -134,6 +137,7 @@ int openFile (const char* pathname, int flags){
             case O_CREATE:
                 nToWrite = sizeof(char)*(strlen(PUB_CREATE)+fNameLen);  //buffer da inviare a server
                 buffer = malloc(nToWrite);
+                memset (buffer, 0, nToWrite);
                 toFreeWrite = buffer;
                 strcpy (buffer, PUB_CREATE);
                 strcat (buffer,pathname);
@@ -143,7 +147,7 @@ int openFile (const char* pathname, int flags){
 
             /* apro un file locked
             case O_LOCK:
-                buffer = malloc(sizeof(char)*(strlen(PUB_CREATE)+strlen(pathname)));
+                buffer = calloc((strlen(PUB_CREATE)+strlen(pathname)),sizeof(char));
                 strcpy (buffer, "op,fl,");
                 strcat (buffer,pathname);
                 if (write(clientSFD, &buffer, sizeof(buffer))==-1) {
@@ -153,7 +157,7 @@ int openFile (const char* pathname, int flags){
 
             // creo un file locked
             case O_CREATE | O_LOCK :
-                buffer = malloc(sizeof(char)*(strlen(PRIV_CREATE)+strlen(pathname)));
+                buffer = calloc((strlen(PRIV_CREATE)+strlen(pathname)),sizeof(char));
                 strcpy (buffer, PRIV_CREATE);
                 strcat (buffer,pathname);
                 nToWrite = sizeof(char)*(strlen(PRIV_CREATE)+strlen(pathname));
@@ -171,6 +175,7 @@ int openFile (const char* pathname, int flags){
     else {
         nToWrite = sizeof(char)*(strlen(OPEN)+strlen(pathname));
         buffer = malloc(nToWrite);
+        memset (buffRead, 0, nToWrite);
         toFreeWrite = buffer;
         strcpy (buffer, OPEN);
         strcat (buffer,pathname);
@@ -217,6 +222,7 @@ int readFile (const char * pathname, void ** buf, size_t* size) {
     //Preparo richiesta al server
     size_t nToWrite = sizeof(char)*(strlen(READ)+fNameLen);
     void * buffer = malloc(nToWrite);
+    memset (buffer, 0, nToWrite);
     void * toFreeWrite = buffer;
     strcpy (buffer, READ);
     strcat(buffer, pathname);
@@ -247,12 +253,14 @@ int readNFiles (int N, const char* dirname) {
     sprintf (nF,"%d",N);
     size_t writeSize = sizeof(char)*(strlen(RD_MUL)+strlen(nF));
     void * buffer = malloc (writeSize);
+    memset (buffer, 0, writeSize);
     void * toFreeWrite = buffer;
     strcpy (buffer, RD_MUL);
     strcat (buffer, nF);
     printf("%s\n",(char *)buffer);
 
     void * buffRead = malloc (MAX_BUF_SIZE);
+    memset (buffer, 0, MAX_BUF_SIZE);
     void * toFree = buffRead;
 
     // Invio richiesta al server
@@ -307,6 +315,7 @@ int readNFiles (int N, const char* dirname) {
 
         // Salvo i dati parziali dal puntatore
         void * content = malloc (fileSize);
+        memset (content, 0, fileSize);
         void * freePtr = content;
         size_t partDataLen = MAX_BUF_SIZE - strlen(infoIndex);
         memcpy(content,buffRead,partDataLen);
@@ -386,7 +395,7 @@ int writeFile (const char* pathname, const char* dirname){
     }
 
     // Trovo la grandezza del file
-    struct stat * fSt = malloc(sizeof(struct stat));
+    struct stat * fSt = calloc(1,sizeof(struct stat));
     if (stat(pathname, fSt)==-1) {
         fclose(fToWrite); 
         return -1;
@@ -432,7 +441,7 @@ int appendToFile (const char* pathname, void* buf, size_t size, const char* dirn
 
     // Creo stringa di richiesta: operazione, size, nomefile
     char opString [MAX_BUF_SIZE];
-    sprintf(opString, "%d,%li,%s",WR,size,pathname);
+    sprintf(opString, "%d,%li,%s\n",WR,size,pathname);
     printf("%s\n",opString);    //TEST
 
     // Invio header richiesta
@@ -440,15 +449,10 @@ int appendToFile (const char* pathname, void* buf, size_t size, const char* dirn
     ssize_t nWritten = 1;
     //size_t totBytesWritten = 0;
     if ((nWritten = write(clientSFD, opString, nToWrite))==-1) return -1;
-    /*while ( nToWrite > 0 && nWritten!=0) {
-        if ((nWritten = write(clientSFD, opString+nWritten, nToWrite))==-1) return -1;
-            nToWrite -= nWritten;
-            totBytesWritten += nWritten;
-    }*/
-    write(clientSFD,EOBUFF,EOB_SIZE);
 
     // Invio file
     void * buffRead = malloc(MAX_BUF_SIZE);
+    memset (buffRead, 0, MAX_BUF_SIZE);
     void * toFree = buffRead;
     if (writeAndRead(buf, &buffRead, size, MAX_BUF_SIZE) ==-1) {
         free(buffRead);
@@ -473,8 +477,10 @@ int removeFile (const char* pathname){
     // Preparo richiesta
     size_t bufferSize = sizeof(char) * (strlen(RMV)+fNameLen);
     void * buffer = malloc(bufferSize);
+    memset (buffer, 0, bufferSize);
     void * toFreeWrite = buffer;
     void * buffRead = malloc(MAX_BUF_SIZE);
+    memset (buffRead, 0, MAX_BUF_SIZE);
     void * toFree = buffRead;
 
     strcpy (buffer, RMV);
@@ -547,8 +553,8 @@ ssize_t writeAndRead (void * bufferToWrite, void ** bufferToRead, size_t bufferS
 int saveFile (void * buffer, const char * dirName, const char * pathname, size_t size) {
 
     // Estraggo solo il nome da un eventuale percorso con cui è stato nominato dal server
-    char * fpath=malloc(sizeof(char)*MAX_NAME_LEN);
-    char * temp = malloc(sizeof(char)*MAX_NAME_LEN);
+    char * fpath = calloc(MAX_NAME_LEN, sizeof(char));
+    char * temp = calloc(MAX_NAME_LEN, sizeof(char));
     strcpy(temp, pathname);
     nameFromPath (temp, &temp);
 
@@ -571,7 +577,7 @@ int saveFile (void * buffer, const char * dirName, const char * pathname, size_t
 }
 
 int getAnswer(void ** buffer, size_t size) {
-    char * string = malloc(sizeof(char)*size);
+    char * string = calloc(size, sizeof(char));
     memcpy(string, (char*)buffer, sizeof(char)*size);
 
     char * toTok;

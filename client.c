@@ -81,8 +81,9 @@ int main (int argc, char ** argv){
                 if (!fOpt_met){
                     if (optarg!=NULL){
                         fOpt_met=1;
-                        sockName=malloc(sizeof(char)*strlen(optarg));
+                        sockName=calloc(strlen(optarg)+1,sizeof(char));
                         strcpy(sockName,optarg);
+
                         // Controllo se è stato specificato msec o uso default
                         if (!tOpt_met) {
                             int tmp = optind;
@@ -111,8 +112,8 @@ int main (int argc, char ** argv){
 
                     if(optarg != NULL) {
     
-                        char * wArg = malloc( sizeof(char)*strlen(optarg));
-                        strcpy(wArg,optarg);
+                        char * wArg = calloc(strlen(optarg),sizeof(char));
+                        strcpy(wArg,optarg); 
                         char * dirName = strtok(wArg, ",");
                         char * numFiles = strtok(NULL, ",");
                         int n=0;
@@ -133,7 +134,7 @@ int main (int argc, char ** argv){
             case 'W': {
                 if (connOpen){
                     if (optarg!=NULL) {
-                        char * args = malloc(sizeof(char)*strlen(optarg));
+                        char * args = calloc(strlen(optarg),sizeof(char));
                         char * saveptr;
                         strcpy(args, optarg);
                         char * currArg = strtok_r(args, ",", &saveptr);
@@ -156,10 +157,11 @@ int main (int argc, char ** argv){
                 if (connOpen){
 
                     if (optarg!=NULL) {
-                        char * rArgs = malloc(sizeof(char)*strlen(optarg));
+                        char * rArgs = calloc(strlen(optarg),sizeof(char));
                         strcpy(rArgs, optarg);
                         char * fToRead = strtok(rArgs,",");
                         void * buffer= malloc(MAX_FILE_SIZE);
+                        memset (buffer, 0, MAX_FILE_SIZE);
                         size_t bufferSize;
                         if (readFile(fToRead, &buffer, &bufferSize)==-1) errEx();
                         while ((fToRead = strtok(NULL, ","))!=NULL) {
@@ -214,7 +216,7 @@ int main (int argc, char ** argv){
             case 'd': {
                 if(optarg!=NULL){
                     if (dirReadFiles==NULL){
-                        dirReadFiles=malloc(sizeof(char)*MAX_NAME_LEN);
+                        dirReadFiles = calloc(MAX_NAME_LEN,sizeof(char));
                     }
                     strcpy(dirReadFiles,optarg);
                 }
@@ -227,7 +229,7 @@ int main (int argc, char ** argv){
             case 'D': {
                 if (optarg!=NULL) {
                     if (expelledFiles==NULL) {
-                        expelledFiles=malloc(sizeof(char)*MAX_NAME_LEN);
+                        expelledFiles = calloc(MAX_NAME_LEN, sizeof(char));
                     }
                     strcpy(expelledFiles,optarg);
                 }
@@ -332,7 +334,7 @@ void navigateDir(char * dirName, int n, int j) {
 
         while (currFile!=NULL) {
             if (stat(currFile->d_name,&dirStreamInfo)==-1) errEx();
-            char * fileName = malloc(sizeof(char)*2048);
+            char * fileName = calloc(2048, sizeof(char));
             strcpy(fileName, dirName);
             strcat(fileName, "/");
             strcat(fileName,currFile->d_name);
@@ -355,7 +357,7 @@ void navigateDir(char * dirName, int n, int j) {
             if (errno!=0) errEx();
         while (j<=n && currFile!=NULL) {
            if (stat(currFile->d_name,&dirStreamInfo)==-1) errEx();
-           char * fileName = malloc(sizeof(char)*2048);
+           char * fileName = calloc(2048, sizeof(char));
            strcpy(fileName, dirName);
            strcat(fileName, "/");
            strcat(fileName,currFile->d_name);

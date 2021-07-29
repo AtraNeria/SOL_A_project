@@ -5,8 +5,7 @@
 #include <string.h>
 
 node * addNode (int desc) {
-    node * List = malloc(sizeof(node));
-    memset (List, 0, sizeof(node));
+    node * List = calloc(1,sizeof(node));
     List->descriptor = desc;
     List->next =NULL;
     return List;
@@ -36,13 +35,13 @@ void deleteNode (int fd, node ** list){
 }
 
 void addFile (FILE * f, long size, char * fname, int fOwner, fileNode **lastAddedFile) {
-    fileNode * newFile = malloc(sizeof(fileNode));
+    fileNode * newFile = calloc(1,sizeof(fileNode));
     newFile->owner = fOwner;
     newFile->fileSize = size;
     newFile->fPointer = f;
     newFile->next = NULL;
     newFile->prev = *lastAddedFile;
-    newFile->fileName = malloc(sizeof(char)*(strlen(fname)+1));
+    newFile->fileName = calloc((strlen(fname)+1),sizeof(char));
     strcpy (newFile->fileName, fname);
     *lastAddedFile = newFile;
 }
@@ -96,7 +95,7 @@ strNode * addString (const char * string, strNode * list) {
         errno = EEXIST;
         return NULL;
     }
-    strNode * newNode = malloc(sizeof(strNode));
+    strNode * newNode = calloc(1,sizeof(strNode));
     strcpy(newNode->str,string);
     newNode->state=1;
     newNode->next=list;

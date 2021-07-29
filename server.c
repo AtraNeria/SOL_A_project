@@ -128,8 +128,7 @@ void startServer () {
     if (bind(serverSFD, (struct sockaddr *)&address, sizeof(address))==-1)   //Permission denied, need sudo
         errEx();
     
-    pthread_t * workers = malloc(sizeof(pthread_t)*threadQuantity);
-    memset (workers,0,sizeof(pthread_t)*threadQuantity);
+    pthread_t * workers = calloc(threadQuantity,sizeof(pthread_t));
 
     int wsFailed = 0;
     if ((wsFailed=createWorkers(workers)) !=-1) {
@@ -150,7 +149,7 @@ void startServer () {
     currSock = socketsList;
     // Client + server + eventFD
     int maxFd = maxClients + 2;     
-    struct pollfd * connectionFDS = malloc(sizeof(struct pollfd)*maxFd);
+    struct pollfd * connectionFDS = calloc(maxFd, sizeof(struct pollfd));
     memset (connectionFDS, 0, sizeof(struct pollfd)*maxFd);
     connectionFDS[0].fd = serverSFD;
     connectionFDS[0].events = POLLIN;
@@ -201,23 +200,26 @@ void startServer () {
             //se non posso stampo un avvertimento
             else printf ("Tentata connessione\n");
         }
-        
+
         //Se un client già connesso ha un'altra richiesta
         for (int i=2;i<maxFd;i++){
             if (connectionFDS[i].revents==POLLIN && connectionFDS[i].fd!=-1) {
                 pthread_mutex_lock(&mutex);
-                if (requestsQueue == NULL) { 
+                printf("Add to req list: %d\n",connectionFDS[i].fd);    //TEST
+                if (requestsQueue == NULL) {
                     // TEST: non inserisce nodo dopo write???? UPDATE: Sembra inserire correttamente
                     requestsQueue = addNode(connectionFDS[i].fd);
                     lastRequest = requestsQueue;
                 }
-                else {lastRequest->next = addNode(connectionFDS[i].fd);
+                else {
+                    lastRequest->next = addNode(connectionFDS[i].fd);
                     lastRequest=lastRequest->next;
                 }
                 pthread_cond_signal(&newReq);
                 pthread_mutex_unlock(&mutex);
             }
         }
+
     }
     free (connectionFDS);
 }
@@ -257,11 +259,12 @@ int createWorkers (pthread_t  workers[]) {
 
 fileNode * initStorage(FILE * f, char * fname, int fOwner){
     fileNode * list = malloc(sizeof(fileNode));
+    memset (list, 0, sizeof(fileNode));
     list->owner=fOwner;
     list->next=NULL;
     list->prev=NULL;
     list->fPointer=f;
-    list->fileName = malloc(sizeof(char)*(strlen(fname)+1));
+    list->fileName = calloc((strlen(fname)+1),sizeof(char));
     strcpy(list->fileName,fname);
     lastAddedFile=list;
     return list;
@@ -277,14 +280,18 @@ void * manageRequest() {
     while(TRUE) {
 
         pthread_mutex_lock(&mutex);
-        while (requestsQueue==NULL) pthread_cond_wait(&newReq,&mutex);
+        while (requestsQueue==NULL /*|| requestsQueue->descriptor==0*/) pthread_cond_wait(&newReq,&mutex);  // TEST ||
+        //while (requestsQueue->descriptor==0 && requestsQueue!=NULL) requestsQueue=popNode(requestsQueue);
+        //if (requestsQueue!=NULL) {                                                                          // TEST
         currentRequest = requestsQueue->descriptor;
-        printf("%d\n",currentRequest);                  //TEST : 5, 0 dopo write
+        printf("Serving: %d\n",currentRequest);                  //TEST : 5, 0 dopo write
         requestsQueue = popNode(requestsQueue);       // FREE invalid pointer after write
+        if (requestsQueue==NULL) lastRequest=NULL;
 
         ssize_t reqRes = 1;
         size_t tr = MAX_BUF_SIZE;
         void * buffer = malloc(tr);
+        memset (buffer, 0, tr);
         void * toFree = buffer;
         memset (buffer, 0, tr);
         size_t totBytesR=0;
@@ -299,7 +306,7 @@ void * manageRequest() {
         }
 
         // Creo una copia del buffer per tokenizzare
-        char * tk = malloc(sizeof(char)*MAX_BUF_SIZE);
+        char * tk = calloc(MAX_BUF_SIZE, sizeof(char));
         memcpy (tk,(char *)buffer,MAX_BUF_SIZE);
         
         // Tolgo il terminatore dalla richiesta, formato: codiceOp,nomeFile,Contenuto
@@ -335,16 +342,16 @@ void * manageRequest() {
                 
             // Richiesta di scrittura
             case WR: {
-                reqArg = strtok_r(NULL, EOBUFF, &ptr);
+                reqArg = strtok_r(NULL, "\n", &ptr);
                 if (reqArg == NULL) sendAnswer (currentRequest, FAILURE);
 
                 else {
                     pthread_mutex_lock(&mutex);
                     // Salvo richiesta completa
                     char fullRequest [MAX_BUF_SIZE];
-                    strcpy(fullRequest, WRITE);
-                    strcat(fullRequest, reqArg);
-                    int reqLen = strlen(fullRequest);
+                    strcpy(fullRequest,WRITE);
+                    strcat(fullRequest,reqArg);
+                    int reqLen = strlen(fullRequest)+1;
 
                     // Ne faccio una copia da tokenizzate
                     char toTok[reqLen];
@@ -368,16 +375,17 @@ void * manageRequest() {
 
                     else {
                         // Scrivo il contenuto eventualmente letto nel buffer precedente
-                        void * buff2 = malloc(MAX_BUF_SIZE);
-                        memset (buff2, 0, MAX_BUF_SIZE);
+                        void * buff2 = calloc(MAX_BUF_SIZE,1);
                         void * toFree = buff2;
                         memcpy (buff2,buffer,MAX_BUF_SIZE);
+
                         buff2 += reqLen;
-                        void * content = malloc(fSize);
-                        void * conToFree = content;
                         size_t partialDataLen = MAX_BUF_SIZE-sizeof(char)*reqLen;
-                        memcpy (content, buff2, partialDataLen);
-                        
+                        void * content = calloc(fSize, 1);
+                        void * conToFree = content;
+                        if (fSize<partialDataLen)
+                            memcpy (content, buff2, fSize);
+                        else memcpy (content, buff2, partialDataLen); 
                         printf("Buffer: %s \n",content);        //TEST
 
                         // Leggo il restante contenuto
@@ -396,7 +404,7 @@ void * manageRequest() {
                             dataToRd -= readRes;
                         }
                         
-                        printf("Res: %d\nBuffer: %s \n",readRes,content);
+                        printf("Res: %d\nBuffer: %s \n",readRes,content);   //TEST
 
                         // Se ho riscontrato problemi nella lettura indico la client di aver fallito
                         if (readRes == -1) {
@@ -550,16 +558,18 @@ void * manageRequest() {
 
     free (toFree);
     free (tk);
+    //}           //TEST
     }
 }
 
 int sendAnswer (int fd, int res) {
     char ansStr [MAX_BUF_SIZE];
-    if (res == SUCCESS) strcpy(ansStr,"0");
-    else strcpy(ansStr,"-1");
+    if (res == SUCCESS) strcpy(ansStr,"0\0");
+    else strcpy(ansStr,"-1\0");
 
     size_t writeSize = sizeof(char) * strlen (ansStr);
     void * buffer = malloc(MAX_BUF_SIZE);
+    memset (buffer, 0, MAX_BUF_SIZE);
     strcpy (buffer, ansStr);
 
     ssize_t nWritten = write(fd, buffer, writeSize);
@@ -574,6 +584,7 @@ int sendFile (int fd, fileNode * f) {
     //Copio il contenuto del file
     size_t writeSize = f->fileSize;
     void * buff = malloc(writeSize);
+    memset (buff, 0, writeSize);
     void * toFree = buff;
     fread (buff, sizeof(char), writeSize, f->fPointer);
     if (!feof(f->fPointer)) {

@@ -34,6 +34,18 @@ void deleteNode (int fd, node ** list){
     }
 }
 
+fileNode * newFile (FILE * f, long size, char * fname, int fOwner, fileNode **lastAddedFile) {
+    fileNode * newFile = calloc(1,sizeof(fileNode));
+    newFile->owner = fOwner;
+    newFile->fileSize = size;
+    newFile->fPointer = f;
+    newFile->next = NULL;
+    newFile->prev = *lastAddedFile;
+    newFile->fileName = calloc((strlen(fname)+1),sizeof(char));
+    strcpy (newFile->fileName, fname);
+    return newFile;
+}
+
 void addFile (FILE * f, long size, char * fname, int fOwner, fileNode **lastAddedFile) {
     fileNode * newFile = calloc(1,sizeof(fileNode));
     newFile->owner = fOwner;
@@ -61,6 +73,13 @@ int searchFile (char * fname, fileNode * storage, fileNode ** ptr) {
         }
     return -1;
     }
+}
+
+int checkLock (char * fname, fileNode * storage){
+    fileNode * ptr = NULL;
+    int res;
+    if ((res=searchFile(fname,storage,&ptr))==-1) return -1;
+    return ptr->owner;
 }
 
 fileNode * popFile (fileNode * list){

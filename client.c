@@ -176,6 +176,7 @@ int main (int argc, char ** argv){
                 break;
             }
 
+
             // Lettura dei primi n file su server; se n=0 o non specificato leggo tutti i file disponibili
             case 'R' : {
                 if (connOpen) {
@@ -250,6 +251,44 @@ int main (int argc, char ** argv){
                 else printWarning(CONN_CLOSED);
                 break;
             }
+
+
+            // Lock file
+            case 'l': {
+                if (connOpen) {
+                    if (optarg!=NULL) {
+                        char * args = calloc(strlen(optarg),sizeof(char));
+                        char * saveptr;
+                        strcpy(args, optarg);
+                        char * currArg = strtok_r(args, ",", &saveptr);
+                        while (currArg!=NULL) {
+                            if (lockFile(currArg)==-1) errEx();
+                            currArg = strtok_r(NULL, ",", &saveptr);
+                        }
+                    }
+                    else printWarning(NO_ARG);
+                }
+                else printWarning(CONN_CLOSED);
+            }
+
+            // Unlock file
+            case 'u': {
+                if (connOpen) {
+                    if (optarg!=NULL) {
+                        char * args = calloc(strlen(optarg),sizeof(char));
+                        char * saveptr;
+                        strcpy(args, optarg);
+                        char * currArg = strtok_r(args, ",", &saveptr);
+                        while (currArg!=NULL) {
+                            if (unlockFile(currArg)==-1) errEx();
+                            currArg = strtok_r(NULL, ",", &saveptr);
+                        }
+                    }
+                    else printWarning(NO_ARG);
+                }
+                else printWarning(CONN_CLOSED);
+            }
+
 
             default: 
                 printWarning(INVALID_OPT);

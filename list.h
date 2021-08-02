@@ -48,10 +48,22 @@ void deleteNode (int fd, node ** list);
 */
 void addFile (FILE * f, long size, char * fname, int fOwner, fileNode **lastAddedFile);
 
+/* Crea un nodo che punta al file f di grandezza file e nome fname, posseduto da fOwner;
+    posizionato in coda alla lisa lastAddedFile.
+    Restituisce un puntatore al nodo.
+*/
+fileNode * newFile (FILE * f, long size, char * fname, int fOwner, fileNode **lastAddedFile);
+
 /* Cerca il nodo con nome fname nella lista storage, salvandone il puntatore in ptr se trovato.
     Restituisce 0 in caso di successo, -1 altrimenti
 */
 int searchFile (char * fname, fileNode * storage, fileNode ** ptr);
+
+/* Controlla se il file fname nella lista storage è bloccato per utilizzo esclusivo da un processo.
+    Restituisce 0 se non è locked, l'fd del processo proprietario altrimenti.
+    Restituisce -1 se il file non è presente in lista.
+*/
+int checkLock (char * fname, fileNode * storage);
 
 /* Elimina dalla lista list il nodo file in testa.
     Restituisce la nuova testa della lista

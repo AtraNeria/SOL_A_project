@@ -9,6 +9,9 @@
 #define CLS 256
 #define PUC 512
 #define RDM 1024
+#define PRC 2048
+#define LCK 4096
+#define ULC 8192
 
 // Codici richieste come stringhe
 #define READ "16,"          // Lettura
@@ -18,6 +21,9 @@
 #define CLOSE_S "256,"      // Chiusura di una socket client
 #define PUB_CREATE "512,"   // Creazione unlocked
 #define RD_MUL "1024,"      // Lettura di molteplici file
+#define PRIV_CREATE "2048," // Creazione locked
+#define LOCK_F "4096,"      // Lock
+#define UNLOCK "8192, "        // Unlock 
 
 #define TEST printf("OK\n");
 #define EOBUFF "£"

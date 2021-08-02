@@ -153,7 +153,7 @@ int openFile (const char* pathname, int flags){
                 if (write(clientSFD, &buffer, sizeof(buffer))==-1) {
                     FREE_RET;
                 }
-                break;
+                break; */
 
             // creo un file locked
             case O_CREATE | O_LOCK :
@@ -161,9 +161,8 @@ int openFile (const char* pathname, int flags){
                 strcpy (buffer, PRIV_CREATE);
                 strcat (buffer,pathname);
                 nToWrite = sizeof(char)*(strlen(PRIV_CREATE)+strlen(pathname));
-
                 if (writeAndRead(buffer,&buffRead, nToWrite, MAX_BUF_SIZE)==-1) FREE_RET;
-                break;*/
+                break;
 
             default:
                 fprintf(stderr,"Flags non valide\n");
@@ -465,6 +464,72 @@ int appendToFile (const char* pathname, void* buf, size_t size, const char* dirn
     return res;
 }
 
+int lockFile(const char* pathname){
+    // Controllo lunghezza nome
+    int fNameLen = strlen(pathname);
+    if (fNameLen > MAX_NAME_LEN) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+
+    // Stringa di richiesta
+    size_t bufferSize = sizeof(char) * (strlen(UNLOCK)+fNameLen);
+    void * buffer = malloc(bufferSize);
+    memset (buffer, 0, bufferSize);
+    void * buffRead = malloc(MAX_BUF_SIZE);
+    memset (buffRead, 0, MAX_BUF_SIZE);
+    void * toFreeWrite = buffer;
+    void * toFree = buffRead;
+    
+    strcpy (buffer, UNLOCK);
+    strcat (buffer, pathname);
+    int result;
+
+    if ((result = writeAndRead(buffer,&buffRead,bufferSize,MAX_BUF_SIZE))==-1) {
+        FREE_RET
+    }
+    else {
+        int answer = getAnswer(&buffRead,MAX_BUF_SIZE);
+        free (toFreeWrite);
+        free (toFree);
+        return answer;
+    }
+
+}
+
+int unlockFile(const char* pathname){
+
+    // Controllo lunghezza nome
+    int fNameLen = strlen(pathname);
+    if (fNameLen > MAX_NAME_LEN) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+
+    // Stringa di richiesta
+    size_t bufferSize = sizeof(char) * (strlen(LOCK_F)+fNameLen);
+    void * buffer = malloc(bufferSize);
+    memset (buffer, 0, bufferSize);
+    void * buffRead = malloc(MAX_BUF_SIZE);
+    memset (buffRead, 0, MAX_BUF_SIZE);
+    void * toFreeWrite = buffer;
+    void * toFree = buffRead;
+    
+    strcpy (buffer, LOCK_F);
+    strcat (buffer, pathname);
+    int result;
+
+    if ((result = writeAndRead(buffer,&buffRead,bufferSize,MAX_BUF_SIZE))==-1) {
+        FREE_RET
+    }
+    else {
+        int answer = getAnswer(&buffRead,MAX_BUF_SIZE);
+        free (toFreeWrite);
+        free (toFree);
+        return answer;
+    }
+}
+
 int removeFile (const char* pathname){
 
     // Controllo lunghezza nome
@@ -501,7 +566,6 @@ int removeFile (const char* pathname){
             closeFile (pathname);}
         return answer;
     }
-    
 }
 
 int closeFile (const char* pathname){

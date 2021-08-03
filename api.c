@@ -18,9 +18,10 @@
 
 #define SET_LO if (lastOperation==1) lastOperation=0
 #define FREE_RET {free(toFreeWrite); free(toFree); return -1;}
+#define PROP(op,file,res,byte) if (pOpt_met) {printOpRes(op,file,res,byte);}
 
 
-
+extern pOpt_met;
 extern int msec;
 extern char * expelledFiles;
 extern char * dirReadFiles;
@@ -87,7 +88,6 @@ int openConnection (const char* sockname, int msec, const struct timespec abstim
         total_t = (start.tv_nsec - end.tv_nsec);
     }
     return result;
-
 }
 
 int closeConnection (const char* sockname) {
@@ -187,17 +187,22 @@ int openFile (const char* pathname, int flags){
 
     if(answer == FAILURE && flags==O_CREATE) {
         errno = EEXIST;
+        PROP(OP,pathname,-1,0)
         return -1;
     }
 
     // si è provato ad aprire file non esistente
     if(answer == FAILURE && flags==0){
         errno = ENOENT;
+        PROP(OP,pathname,-1,0)
         return -1;
     }
     
     if (answer==SUCCESS) lastOperation = 1;
     openFiles=addString(pathname, openFiles);
+
+    //Se le stampe sono abilitate stampo l'esito
+    PROP(OP,pathname,answer,0)
     return answer;
 }
 
@@ -240,6 +245,9 @@ int readFile (const char * pathname, void ** buf, size_t* size) {
     }
     free (toFreeWrite);
     *size = result;
+
+    //Se le stampe sono abilitate stampo l'esito
+    PROP(RD,pathname,0,size)
     return 0;
 }
 
@@ -336,9 +344,11 @@ int readNFiles (int N, const char* dirname) {
         }
 
         if (dirname!=NULL) saveFile(content, dirname, pathName, fileSize);
+
+        //Se le stampe sono abilitate stampo l'esito
+        if (pOpt_met) printOpRes(RD,pathName,0,totBytes);
         free (freePtr);
         j++;
-
     } 
 
     free (toFreeWrite);
@@ -362,6 +372,7 @@ int writeFile (const char* pathname, const char* dirname){
     size_t fNameLen = strlen(pathname);
     if (fNameLen > MAX_NAME_LEN) {
         errno = ENAMETOOLONG;
+        PROP(WR,pathname,-1,0)
         return -1;
     }
 
@@ -369,12 +380,14 @@ int writeFile (const char* pathname, const char* dirname){
     int fileS = searchString (pathname, openFiles);
     if (fileS == 0) {
         errno = EPERM;
+        PROP(WR,pathname,-1,0)
         return -1;
     }
 
     // Apro file in locale 
     FILE * fToWrite; 
     if ((fToWrite = fopen(pathname, "r+") )== NULL) {
+        PROP(WR,pathname,-1,0)
         return -1;
     }
 
@@ -388,7 +401,8 @@ int writeFile (const char* pathname, const char* dirname){
         }
         else {
             // Se il file è presente non lo sovrascrivo
-            fclose(fToWrite);                   
+            fclose(fToWrite);
+            PROP(WR,pathname,-1,0)
             return -1;
         }
     }
@@ -397,6 +411,7 @@ int writeFile (const char* pathname, const char* dirname){
     struct stat * fSt = calloc(1,sizeof(struct stat));
     if (stat(pathname, fSt)==-1) {
         fclose(fToWrite); 
+        PROP(WR,pathname,-1,0)
         return -1;
     }
 
@@ -406,6 +421,7 @@ int writeFile (const char* pathname, const char* dirname){
     if(fileSize > MAX_FILE_SIZE) {
         fclose(fToWrite); 
         errno = EFBIG;
+        PROP(WR,pathname,-1,0)
         return -1;
     }
 
@@ -415,6 +431,7 @@ int writeFile (const char* pathname, const char* dirname){
     if (fread (buffer, 1, fileSize, fToWrite)==0 && ferror(fToWrite)!=0) {
         fclose(fToWrite);
         free(buffer);
+        PROP(WR,pathname,-1,0)
         return -1;
     }
 
@@ -425,6 +442,7 @@ int writeFile (const char* pathname, const char* dirname){
         return -1;
     }
     free(buffer);
+    PROP(WR,pathname,0,fileSize)
     if (fclose(fToWrite) == EOF) return -1;
     return 0;
 }
@@ -469,6 +487,7 @@ int lockFile(const char* pathname){
     int fNameLen = strlen(pathname);
     if (fNameLen > MAX_NAME_LEN) {
         errno = ENAMETOOLONG;
+        PROP(LCK,pathname,-1,0)
         return -1;
     }
 
@@ -486,12 +505,14 @@ int lockFile(const char* pathname){
     int result;
 
     if ((result = writeAndRead(buffer,&buffRead,bufferSize,MAX_BUF_SIZE))==-1) {
+        PROP(LCK,pathname,result,0)
         FREE_RET
     }
     else {
         int answer = getAnswer(&buffRead,MAX_BUF_SIZE);
         free (toFreeWrite);
         free (toFree);
+        PROP(LCK,pathname,answer,0)
         return answer;
     }
 
@@ -520,12 +541,14 @@ int unlockFile(const char* pathname){
     int result;
 
     if ((result = writeAndRead(buffer,&buffRead,bufferSize,MAX_BUF_SIZE))==-1) {
+        PROP(ULC,pathname,-1,0)
         FREE_RET
     }
     else {
         int answer = getAnswer(&buffRead,MAX_BUF_SIZE);
         free (toFreeWrite);
         free (toFree);
+        PROP(ULC,pathname,answer,0)
         return answer;
     }
 }
@@ -536,6 +559,7 @@ int removeFile (const char* pathname){
     int fNameLen = strlen(pathname);
     if (fNameLen > MAX_NAME_LEN) {
         errno = ENAMETOOLONG;
+        PROP(RM,pathname,-1,0)
         return -1;
     }
 
@@ -553,6 +577,7 @@ int removeFile (const char* pathname){
     int result;
     // Se la comunicazione col server è fallita riporto errore dopo aver deallocato
     if ((result = writeAndRead(buffer, &buffRead, bufferSize, MAX_BUF_SIZE))==-1) {
+        PROP(RM,pathname,-1,0)
         FREE_RET
     }
 
@@ -564,6 +589,7 @@ int removeFile (const char* pathname){
         // Se è stato rimosso da server chiudo il file da lato client
         if (answer == SUCCESS) {
             closeFile (pathname);}
+        PROP(RM,pathname,answer,0)
         return answer;
     }
 }
@@ -578,6 +604,7 @@ int closeFile (const char* pathname){
 
     // Chiudo in locale il file
     int close = closeString (pathname, &openFiles);
+    PROP(CF,pathname,close,0)
     return close;
 }
 
@@ -651,4 +678,40 @@ int getAnswer(void ** buffer, size_t size) {
     free (string);
     if (res==1) return -1;
     return res;
+}
+
+void printOpRes (int op, char * fname, int res, size_t bytes) {
+    switch (op)
+    {
+    case RD:
+        printf ("Eseguita lettura di %li bytes del file %s\n con risultato\n",bytes,fname,res);
+        break;
+    
+    case WR:
+        printf ("Eseguita scrittura di %li bytes del file %s\n con risultato\n",bytes,fname,res);
+        break;
+
+    case OP:
+        printf ("Eseguita apertura del file %s con risultato %d\n",fname,res);
+        break;
+
+    case CF:
+        printf ("Eseguita chiusura del file %s con risultato %d\n",fname,res);
+        break;
+
+    case RM:
+        printf ("Eseguita rimozione del file %s con risultato %d\n",fname,res);
+        break;
+
+    case LCK:
+        printf ("Eseguita acquisizione del file %s con risultato %d\n",fname,res);
+        break;
+
+    case ULC:
+        printf ("Eseguito rilascio del file %s con risultato %d\n",fname,res);
+        break;
+
+    default:
+        break;
+    }
 }

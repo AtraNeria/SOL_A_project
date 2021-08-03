@@ -2,6 +2,7 @@
 #define _COMMUNICATION_PROTOCOL_H
 
 // Codici richieste
+#define CF 8
 #define RD 16
 #define WR 32
 #define OP 64
@@ -23,7 +24,7 @@
 #define RD_MUL "1024,"      // Lettura di molteplici file
 #define PRIV_CREATE "2048," // Creazione locked
 #define LOCK_F "4096,"      // Lock
-#define UNLOCK "8192, "        // Unlock 
+#define UNLOCK "8192, "     // Unlock 
 
 #define TEST printf("OK\n");
 #define EOBUFF "£"

@@ -3,3 +3,4 @@ Storage_Dimension;
 Capacità_Bytes;
 Request_Queue_Lenght;
 Max_Connessioni_Client;
+File_Logging;

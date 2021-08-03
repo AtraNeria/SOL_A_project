@@ -51,6 +51,7 @@ pthread_cond_t newReq = PTHREAD_COND_INITIALIZER;
 int fileCount = 0;
 fileNode * storage=NULL;
 fileNode * lastAddedFile=NULL;
+FILE * logging;
 
 int evClose;
 
@@ -87,6 +88,11 @@ void init (int index, char * string) {
             fprintf(stderr,"Numero client richiesti troppo alto, impossibile configurare il server");
             exit(EXIT_FAILURE);
         }
+        break;
+
+    case 5:
+        logging = fopen(string,"w+");
+        break;
 
     default:
         break;

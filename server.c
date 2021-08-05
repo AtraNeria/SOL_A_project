@@ -42,16 +42,17 @@ int storageDim;
 int capacity;
 int queueLenght;
 int maxClients;
+FILE * logging;
 
 node * requestsQueue=NULL;
 node * lastRequest;
 pthread_mutex_t mutex;
 pthread_cond_t newReq = PTHREAD_COND_INITIALIZER;
+pthread_cond_t fileUnlocked = PTHREAD_COND_INITIALIZER;
 
 int fileCount = 0;
 fileNode * storage=NULL;
 fileNode * lastAddedFile=NULL;
-FILE * logging;
 
 int evClose;
 
@@ -92,6 +93,7 @@ void init (int index, char * string) {
 
     case 5:
         logging = fopen(string,"w+");
+        if (logging==NULL) fprintf(stderr,"Impossibile aprire file di logging");
         break;
 
     default:
@@ -184,6 +186,11 @@ void startServer () {
             deleteNode(*toClose,&socketsList);
             close(*toClose);
             free(eventB);
+
+            pthread_mutex_lock(&mutex);
+            logOperation(CC, *toClose, 0, NULL);
+            pthread_mutex_unlock(&mutex);
+
         }
 
         //Controllo se ci sono altre richieste
@@ -203,6 +210,10 @@ void startServer () {
                 connectionFDS[j].fd = accept (serverSFD, NULL, 0);  //se posso accetto connessione
                 currSock->next = addNode(connectionFDS[j].fd);        // per eventuale cleanup
                 currSock = currSock->next;
+                // Accept nel file di logging
+                pthread_mutex_lock(&mutex);
+                logOperation(OC, connectionFDS[j].fd, 0, NULL);
+                pthread_mutex_unlock(&mutex);
             }
             //se non posso stampo un avvertimento
             else printf ("Tentata connessione\n");
@@ -332,23 +343,37 @@ void * manageRequest() {
             // Richiesta di lettura
             case RD: {
                 reqArg = strtok_r(NULL, EOBUFF,&ptr);
-                if (reqArg == NULL) sendAnswer (currentRequest, FAILURE);
+                if (reqArg == NULL) {
+                    logOperation(RD, currentRequest, FAILURE, reqArg);
+                    sendAnswer (currentRequest, FAILURE);
+                }
 
                 else {
                     pthread_mutex_lock(&mutex);
                     fileNode * fToRd;
                     // Controllo la presenza del file, lo invio se trovato altrimento riporto il fallimento
-                    if (searchFile(reqArg, storage, &fToRd)==-1) sendAnswer(currentRequest, FAILURE);
-                    else if (sendFile(currentRequest, fToRd)==-1) errEx();
+                    if (searchFile(reqArg, storage, &fToRd)==-1) {
+                        logOperation(RD, currentRequest, FAILURE, reqArg);
+                        sendAnswer(currentRequest, FAILURE);
+                    }
+                    else if (sendFile(currentRequest, fToRd)==-1) {
+                        logOperation(RD, currentRequest, FAILURE, reqArg);
+                        errEx();
+                    }
+
+                    logOperation(RD, currentRequest, SUCCESS, reqArg);
                     pthread_mutex_unlock(&mutex);
                 }
+
                 break;
             }
                 
             // Richiesta di scrittura
             case WR: {
                 reqArg = strtok_r(NULL, "\n", &ptr);
-                if (reqArg == NULL) sendAnswer (currentRequest, FAILURE);
+                if (reqArg == NULL) {
+                    logOperation(WR, currentRequest, FAILURE, reqArg);
+                    sendAnswer (currentRequest, FAILURE);}
 
                 else {
                     pthread_mutex_lock(&mutex);
@@ -375,12 +400,16 @@ void * manageRequest() {
                     // Controllo che il file sia stato creato
                     fileNode * fToWr;
                     if (searchFile(fileName, storage, &fToWr) == -1) {
+                        logOperation(WR, currentRequest, FAILURE, reqArg);
                         sendAnswer (currentRequest, FAILURE);
                     }
 
                     else {
                         // Controllo se si dispone dei permessi per scrivere sul file
-                        if(fToWr->owner!=0 && fToWr->owner!=currentRequest) sendAnswer(currentRequest,FAILURE);
+                        if(fToWr->owner!=0 && fToWr->owner!=currentRequest) {
+                            logOperation(WR, currentRequest, FAILURE, reqArg);
+                            sendAnswer(currentRequest,FAILURE);
+                        }
                         else {
                             // Scrivo il contenuto eventualmente letto nel buffer precedente
                             void * buff2 = calloc(MAX_BUF_SIZE,1);
@@ -418,6 +447,7 @@ void * manageRequest() {
                             if (readRes == -1) {
                                 free(conToFree);
                                 free(toFree);
+                                logOperation(WR, currentRequest, FAILURE, reqArg);
                                 sendAnswer (currentRequest, FAILURE);
                             }
 
@@ -431,6 +461,7 @@ void * manageRequest() {
                                 }
                                 free(conToFree);
                                 free(toFree);
+                                logOperation(WR, currentRequest, SUCCESS, reqArg);
                                 sendAnswer(currentRequest, SUCCESS);
                             }
                         }
@@ -443,14 +474,22 @@ void * manageRequest() {
             // Apertura di un file
             case OP: {
                 reqArg = strtok_r(NULL, EOBUFF, &ptr);
-                if (reqArg == NULL) sendAnswer(currentRequest, FAILURE);
+                if (reqArg == NULL) {
+                    logOperation(OP, currentRequest, FAILURE, reqArg);
+                    sendAnswer(currentRequest, FAILURE);
+                    }
                     
                 else {
                     fileNode * fToOp;
                     pthread_mutex_lock(&mutex);
-                    if (searchFile(reqArg, storage, &fToOp)==-1) 
+                    if (searchFile(reqArg, storage, &fToOp)==-1) {
+                        logOperation(OP, currentRequest, FAILURE, reqArg);
                         sendAnswer(currentRequest, FAILURE);
-                    else sendAnswer(currentRequest, SUCCESS);
+                    }
+                    else {
+                        logOperation(OP, currentRequest, SUCCESS, reqArg);
+                        sendAnswer(currentRequest, SUCCESS);
+                    }
                     pthread_mutex_unlock(&mutex);
                 }
                 break;
@@ -459,16 +498,22 @@ void * manageRequest() {
             // Rimozione di un file
             case RM: {
                 reqArg = strtok_r (NULL, EOBUFF, &ptr);
-                if (reqArg == NULL) sendAnswer (currentRequest, FAILURE);
+                if (reqArg == NULL) {
+                    logOperation(RM, currentRequest, FAILURE, reqArg);
+                    sendAnswer (currentRequest, FAILURE);
+                }
 
                 else {
                     pthread_mutex_lock(&mutex);
                     fileNode * fToRm;
                     if (searchFile(reqArg, storage, &fToRm)==-1) {
-                        sendAnswer(currentRequest, FAILURE);}
+                        logOperation(RM, currentRequest, FAILURE, reqArg);
+                        sendAnswer(currentRequest, FAILURE);
+                    }
                     else {
                         deleteFile (fToRm, &storage, &lastAddedFile);
                         fileCount--;
+                        logOperation(RM, currentRequest, SUCCESS, reqArg);
                         sendAnswer(currentRequest, SUCCESS);
                     }
                     pthread_mutex_unlock(&mutex);
@@ -491,16 +536,21 @@ void * manageRequest() {
                     while (fileCount>=capacity) {
                         storage = popFile(storage);
                         fileCount --;
+                        // TO DO: send expelled files and log
                     }
                 }
 
                 reqArg = strtok_r (NULL, EOBUFF, &ptr);
-                if (reqArg == NULL) sendAnswer (currentRequest, FAILURE);
+                if (reqArg == NULL) {
+                    logOperation(PUC, currentRequest, FAILURE, reqArg);
+                    sendAnswer (currentRequest, FAILURE);
+                }
 
                 else {
                     if (storage == NULL) {
                         storage = initStorage (NULL, reqArg, 0);
                         fileCount++;
+                        logOperation(PUC, currentRequest, SUCCESS, reqArg);
                         sendAnswer(currentRequest,SUCCESS);
                     }
                     else {
@@ -510,9 +560,13 @@ void * manageRequest() {
                             lastAddedFile = lastAddedFile->next;
                             fileCount++;
                             printf("Last file: %s\n",lastAddedFile->fileName);
+                            logOperation(PUC, currentRequest, SUCCESS, reqArg);
                             sendAnswer (currentRequest, SUCCESS);
                         }
-                        else sendAnswer (currentRequest, FAILURE);
+                        else {
+                            logOperation(PUC, currentRequest, FAILURE, reqArg);
+                            sendAnswer (currentRequest, FAILURE);
+                        }
                     }
                     pthread_mutex_unlock(&mutex);
                 }
@@ -558,6 +612,7 @@ void * manageRequest() {
                     }
 
                 }
+                logOperation (RDM, currentRequest,0,NULL);
                 pthread_mutex_unlock(&mutex);
                 break;
             }
@@ -569,16 +624,21 @@ void * manageRequest() {
                     while (fileCount>=capacity) {
                         storage = popFile(storage);
                         fileCount --;
+                        // TO DO: send expelled file and log
                     }
                 }
 
                 reqArg = strtok_r (NULL, EOBUFF, &ptr);
-                if (reqArg == NULL) sendAnswer (currentRequest, FAILURE);
+                if (reqArg == NULL) {
+                    logOperation(PRC,currentRequest,FAILURE,reqArg);
+                    sendAnswer (currentRequest, FAILURE);
+                }
 
                 else {
                     if (storage == NULL) {
                         storage = initStorage (NULL, reqArg, currentRequest);
                         fileCount++;
+                        logOperation(PRC,currentRequest,SUCCESS,reqArg);
                         sendAnswer(currentRequest,SUCCESS);
                     }
                     else {
@@ -588,9 +648,13 @@ void * manageRequest() {
                             lastAddedFile = lastAddedFile->next;
                             fileCount++;
                             printf("Last file: %s\n",lastAddedFile->fileName);
+                            logOperation(PRC,currentRequest,SUCCESS,reqArg);
                             sendAnswer (currentRequest, SUCCESS);
                         }
-                        else sendAnswer (currentRequest, FAILURE);
+                        else {
+                            logOperation (PRC,currentRequest,FAILURE,reqArg);
+                            sendAnswer (currentRequest, FAILURE);
+                        }
                     }
                     pthread_mutex_unlock(&mutex);
                 }
@@ -600,20 +664,30 @@ void * manageRequest() {
             // Unlock di un file
             case ULC: {
                 reqArg = strtok_r (NULL, EOBUFF, &ptr);
-                if (reqArg == NULL) sendAnswer (currentRequest, FAILURE);
+                if (reqArg == NULL) {
+                    logOperation (ULC, currentRequest, FAILURE, reqArg);
+                    sendAnswer (currentRequest, FAILURE);
+                }
 
                 else {
                     pthread_mutex_lock(&mutex);
                     fileNode * fToUnl;
                     int res = searchFile (reqArg, storage, &fToUnl);
 
-                    if (res==-1) sendAnswer(currentRequest, FAILURE);
+                    if (res==-1) {
+                        logOperation (ULC, currentRequest, FAILURE, reqArg);
+                        sendAnswer(currentRequest, FAILURE);
+                    }
                     else {
                         if (fToUnl->owner==currentRequest) { 
                             fToUnl->owner=0;
+                            logOperation (ULC, currentRequest, SUCCESS, reqArg);
                             sendAnswer(currentRequest,SUCCESS);
                         }
-                        else sendAnswer(currentRequest, FAILURE);
+                        else {
+                            logOperation (ULC, currentRequest, FAILURE, reqArg);
+                            sendAnswer(currentRequest, FAILURE);
+                        }
                     }
                     pthread_mutex_unlock(&mutex);
                 }
@@ -623,21 +697,37 @@ void * manageRequest() {
             // Lock di un file
             case LCK: {
                 reqArg = strtok_r (NULL, EOBUFF, &ptr);
-                if (reqArg == NULL) sendAnswer (currentRequest, FAILURE);
+                if (reqArg == NULL) {
+                    logOperation (LCK, currentRequest, FAILURE, reqArg);    
+                    sendAnswer (currentRequest, FAILURE);
+                }
 
                 else {
                     pthread_mutex_lock(&mutex);
                     fileNode * fToLc;
                     int res = searchFile (reqArg, storage, &fToLc);
 
-                    if (res==-1) sendAnswer(currentRequest, FAILURE);
+                    if (res==-1) {
+                        logOperation (LCK, currentRequest, FAILURE, reqArg);       
+                        sendAnswer(currentRequest, FAILURE);
+                    }
                     else {
                         if (fToLc->owner==currentRequest || fToLc->owner==0) { 
                             fToLc->owner = currentRequest;
+                            logOperation (LCK, currentRequest, SUCCESS, reqArg);    
                             sendAnswer(currentRequest,SUCCESS);
                         }
                         else {
-                            //aspetto che la lock venga resettata
+                            // TO DO: se c'è lho locked come fa a essere rilasciato? Also, control timeout
+                            int released = 0;
+                            while (!released) {
+                                pthread_cond_wait(&fileUnlocked,&mutex);
+                                if (fToLc->owner==0) {
+                                    fToLc->owner=currentRequest;
+                                    released=1;
+                                }
+                            }
+
                         }
                     }
                     pthread_mutex_unlock(&mutex);
@@ -699,4 +789,67 @@ int sendFile (int fd, fileNode * f) {
     write(fd, EOBUFF, EOB_SIZE);
     free (toFree);
     return 0; 
+}
+
+void logOperation (int op, int process, int res, char * file) {
+
+    if (logging!=NULL) {
+        switch (op)
+            {
+            case RD:
+                fprintf (logging,"Read, file %s, fd %d, result %d\n",file,process,res);
+                break;
+
+            case RDM:
+                fprintf (logging, "Multiple read for process %d\n",process);
+                break;
+            
+            case WR:
+                fprintf (logging,"Write, file %s, fd %d, result %d\n",file,process,res);
+                break;
+
+            case OP:
+                fprintf (logging,"Open, file %s, fd %d, result %d\n",file,process,res);
+                break;
+
+            case CF:
+                fprintf (logging,"Close, file %s, fd %d, result %d\n",file,process,res);
+                break;
+
+            case RM:
+                fprintf (logging,"Remove, file %s, fd %d, result %d\n",file,process,res);
+                break;
+            
+            case EXF:
+                fprintf (logging,"Expel, file %s, fd %d, result %d\n",file,process,res);
+                break;
+
+            case PUC:
+                fprintf (logging,"Create unlocked, file %s, fd %d, result %d\n",file,process,res);
+                break;
+            
+            case PRC:
+                fprintf (logging,"Create locked, file %s, fd %d, result %d\n",file,process,res);
+                break;
+
+            case LCK:
+                fprintf (logging,"Lock, file %s, fd %d, result %d\n",file,process,res);
+                break;
+
+            case ULC:
+                fprintf (logging,"Unlock, file %s, fd %d, result %d\n",file,process,res);
+                break;
+
+            case CC:
+                fprintf (logging,"Closed connection with fd %d\n",process);
+                break;
+
+            case OC:
+                fprintf (logging,"Accepted connection from fd %d\n",process);
+                break;
+
+            default:
+                break;
+            }
+    }
 }

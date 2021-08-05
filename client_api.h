@@ -107,4 +107,11 @@ int closeFile(const char* pathname);
     */
 int removeFile(const char* pathname);
 
+
+
+    /*  Stampa su terminale le operazioni compiute se l'opzione -p è stata specificata.
+    */
+void printOpRes (int op, const char * fname, int res, size_t bytes);
+
+
 #endif

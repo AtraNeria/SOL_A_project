@@ -55,5 +55,5 @@ test1:
 	mv ./main.out ./client.out ./Test1
 
 cleantest:
-	rm ./Test1/server ./Test1/client.out ./Test1/main.out
+	rm ./Test1/log.txt ./Test1/server ./Test1/client.out ./Test1/main.out
 	make cleanall

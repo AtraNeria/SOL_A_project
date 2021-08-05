@@ -23,4 +23,11 @@ int createWorkers (pthread_t workers[]);
     */
 void * manageRequest();
 
+    /*  Registra nel file di logging specificato nella configurazione iniziale
+        l'operazione op avvenuta per il processo identificato da fd process,
+        con esito res e su file file.
+        Se l'operazione non concerne file come parametro file si passa NULL.
+    */
+void logOperation (int op, int process, int res, char * file);
+
 #endif

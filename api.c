@@ -21,7 +21,7 @@
 #define PROP(op,file,res,byte) if (pOpt_met) {printOpRes(op,file,res,byte);}
 
 
-extern pOpt_met;
+extern int pOpt_met;
 extern int msec;
 extern char * expelledFiles;
 extern char * dirReadFiles;
@@ -49,9 +49,9 @@ ssize_t writeAndRead(void * bufferToWrite, void ** bufferToRead, size_t bufferSi
 int saveFile (void * buffer, const char * dirName, const char * pathname, size_t size);
 
 /* Legge size bytes di buffer e restituisce la risposta contenutavi.
-    
 */
 int getAnswer(void ** buffer, size_t size);
+
 
 int openConnection (const char* sockname, int msec, const struct timespec abstime) {     //see timespec_get (da settare nel client prima della chiamata)
     long int total_t=0;                     //tempo totale passato da confrontare con il tempo limite
@@ -247,7 +247,7 @@ int readFile (const char * pathname, void ** buf, size_t* size) {
     *size = result;
 
     //Se le stampe sono abilitate stampo l'esito
-    PROP(RD,pathname,0,size)
+    PROP(RD,pathname,0,*size)
     return 0;
 }
 
@@ -680,15 +680,15 @@ int getAnswer(void ** buffer, size_t size) {
     return res;
 }
 
-void printOpRes (int op, char * fname, int res, size_t bytes) {
+void printOpRes (int op, const char * fname, int res, size_t bytes) {
     switch (op)
     {
     case RD:
-        printf ("Eseguita lettura di %li bytes del file %s\n con risultato\n",bytes,fname,res);
+        printf ("Eseguita lettura di %li bytes del file %s\n con risultato %d\n",bytes,fname,res);
         break;
     
     case WR:
-        printf ("Eseguita scrittura di %li bytes del file %s\n con risultato\n",bytes,fname,res);
+        printf ("Eseguita scrittura di %li bytes del file %s\n con risultato %d\n",bytes,fname,res);
         break;
 
     case OP:

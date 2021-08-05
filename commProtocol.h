@@ -1,6 +1,11 @@
 #ifndef _COMMUNICATION_PROTOCOL_H
 #define _COMMUNICATION_PROTOCOL_H
 
+// Codici operazioni su connessione
+#define CC 3            // Apertura connessione con client
+#define OC 5            // Chiusura  connessione con client
+#define EXF 7           // Espulsione file
+
 // Codici richieste
 #define CF 8
 #define RD 16

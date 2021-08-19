@@ -210,7 +210,7 @@ int readFile (const char * pathname, void ** buf, size_t* size) {
 
     // Controllo lunghezza nome
     int fNameLen = strlen (pathname);
-    if(fNameLen>MAX_NAME_LEN) {
+    if (fNameLen>MAX_NAME_LEN) {
         errno = ENAMETOOLONG;
         return -1;
     }
@@ -264,25 +264,27 @@ int readNFiles (int N, const char* dirname) {
     void * toFreeWrite = buffer;
     strcpy (buffer, RD_MUL);
     strcat (buffer, nF);
-    printf("%s\n",(char *)buffer);
 
-    void * buffRead = malloc (MAX_BUF_SIZE);
-    memset (buffer, 0, MAX_BUF_SIZE);
-    void * toFree = buffRead;
-
-    // Invio richiesta al server
-    size_t nToWrite = writeSize;
-    ssize_t nWritten;
-    size_t totBytesWritten = 0;
-    
-    while (nToWrite>0) {
-        if ((nWritten = write(clientSFD, buffer+totBytesWritten, nToWrite))==-1) FREE_RET
-            nToWrite -= nWritten;
-            totBytesWritten += nWritten;
-        }
-    
+    // Invio la richiesta al server il quale risponde con il numero di file disponibili
+    void * buff = malloc(MAX_BUF_SIZE);
+    void * tmp = buff;
+    memset (buff, 0, MAX_BUF_SIZE);
+    if (writeAndRead(buffer,&buff,writeSize,MAX_BUF_SIZE)==-1) {
+        free(toFreeWrite);
+        free(buff);
+        return -1;
+    }
+    N = getAnswer(&buff,MAX_BUF_SIZE);
+    printf("Available files: %d\n",N);
+    free (tmp);
+    // Segnalo al server di procedere con l'invio dei file
+    sendAnswer(clientSFD,SUCCESS);
 
     // Ciclo per leggere un file alla volta e copiarlo, finchè non ne leggo N o arrivo all'ultimo inviato
+    void * buffRead = malloc (MAX_BUF_SIZE);
+    memset (buffRead, 0, MAX_BUF_SIZE);
+    void * toFree = buffRead;
+
     int j = 1;
     while (j<=N && buffRead!=NULL) {
 
@@ -291,14 +293,15 @@ int readNFiles (int N, const char* dirname) {
         char infoIndex[MAX_BUF_SIZE]; // header completo
         char pathName[MAX_NAME_LEN];  // nome file
 
-
         // Leggo header sul file
         size_t nToRd = MAX_BUF_SIZE;
         ssize_t nRead = 1;
         size_t totBytes = 0;
         while (nToRd>0 && nRead!=0) {
-            if (totBytes!=0 && bufferCheck(buffRead)==0) break;
-            if ((nRead=read(clientSFD,buffRead+totBytes,nToRd))==-1) {
+            printf("To read :%d\n",nToRd);
+            if (totBytes!=0 && bufferCheck(buffRead)!=0) break;
+            printf("WAITING HEADER FILE\n");
+            if ((nRead=read(clientSFD,buffRead+totBytes,nToRd))==-1) {      // Stuck on read
                 free(toFreeWrite);
                 free(toFree);
                 return -1;
@@ -306,6 +309,7 @@ int readNFiles (int N, const char* dirname) {
             nToRd-=nRead;
             totBytes +=nRead;
         }
+        printf("%s\n",(char *)buffRead);
 
         // Estraggo il nome da buffer
         tk = strtok(buffRead,",");
@@ -332,7 +336,7 @@ int readNFiles (int N, const char* dirname) {
         nRead = 1;
         totBytes = 0;
         while (nToRd>0 && nRead!=0) {
-            if (totBytes!=0 && bufferCheck(content)==0) break;
+            if (totBytes!=0 && bufferCheck(content)!=0) break;
             if ((nRead=read(clientSFD,content+totBytes,nToRd))==-1) {
                 free(buffer);
                 free(toFree);
@@ -464,8 +468,12 @@ int appendToFile (const char* pathname, void* buf, size_t size, const char* dirn
     // Invio header richiesta
     size_t nToWrite = sizeof(char)*strlen(opString);
     ssize_t nWritten = 1;
-    //size_t totBytesWritten = 0;
-    if ((nWritten = write(clientSFD, opString, nToWrite))==-1) return -1;
+    size_t totBytesWritten=0;
+    while (nToWrite>0 && nWritten!=0){
+        if ((nWritten = write(clientSFD, opString+totBytesWritten, nToWrite))==-1) return -1;
+        totBytesWritten+=nWritten;
+        nToWrite-=nWritten;
+        }
 
     // Invio file
     void * buffRead = malloc(MAX_BUF_SIZE);
@@ -616,7 +624,6 @@ ssize_t writeAndRead (void * bufferToWrite, void ** bufferToRead, size_t bufferS
     size_t totBytesWritten = 0;
 
     printf("%s\n",(char*)bufferToWrite);    //TEST
-
     while ( nToWrite > 0 && nWritten!=0) {
         if ((nWritten = write(clientSFD, bufferToWrite+totBytesWritten, nToWrite))==-1) return -1;
             nToWrite -= nWritten;

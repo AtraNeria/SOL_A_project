@@ -195,3 +195,12 @@ int closeString (const char * string, strNode ** list) {
 
     return 0;
 }
+
+int listCount (node * list) {
+    int count = 0;
+    while (list!=NULL) {
+        count ++;
+        list = list->next;
+    }
+    return count;
+}

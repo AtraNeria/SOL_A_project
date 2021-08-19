@@ -9,6 +9,7 @@
 #include <errno.h>
 #include <poll.h>
 #include <pthread.h>
+#include <signal.h>
 #include "server.h"
 #include "commProtocol.h"
 #include "list.h"
@@ -26,16 +27,23 @@ void cleanup(pthread_t workers[], int index, node * socket_list);
 //inizializza lo storage all'arrivo del primo file; ne ritorna il puntatore
 fileNode * initStorage(FILE * f, char * fname, int fOwner);
 
-/* Invia esito res di un'operazione al client fd.
-    Restituisce 0 se l'invio ha successo, -1 altrimenti
-*/
-int sendAnswer (int fd, int res);
-
-
 /* Invia un file f al client fd.
     Restituisce 0 se l'invio ha successo, -1 altrimenti
 */
 int sendFile (int file, fileNode * f);
+
+/* Segnala sull'eventfd fdListen fd
+*/
+void * writeListenFd (int fd);
+
+// Setta la flag sigiq_flag in caso di ricezione SIGINT o SIGQUIT
+void * setIqFl ();
+// Setta la flag sighup_flag in caso di ricezione SIGHUP
+void * setShFl ();
+
+// Flags settate dalla gestione dei segnali
+int sigiq;
+int sighup;
 
 int threadQuantity;
 int storageDim;
@@ -55,6 +63,7 @@ fileNode * storage=NULL;
 fileNode * lastAddedFile=NULL;
 
 int evClose;
+int fdListen;
 
 
 
@@ -122,6 +131,28 @@ void readConfig () {
 
 void startServer () {
 
+    sigiq = 0;
+    sighup = 0;
+
+    /*// Definisco la gestione segnali
+    //Per SIGINT e SIGQUIT
+    struct sigaction * immediate;
+    memset(immediate, 0, sizeof(immediate));
+    immediate->sa_handler = setIqFl;
+    //Per SIGHUP
+    struct sigaction * finishFirst;
+    memset(finishFirst, 0, sizeof(finishFirst));
+    finishFirst->sa_handler = setShFl;
+    // Ignoro SIGPIPE
+    struct sigaction * ignore;
+    memset(ignore, 0, sizeof(ignore));
+    ignore->sa_handler = SIG_IGN;
+    // Registro le azioni
+    sigaction(SIGINT,immediate,NULL);
+    sigaction(SIGQUIT,immediate,NULL);
+    sigaction(SIGHUP,finishFirst,NULL);
+    sigaction(SIGPIPE,ignore,NULL); */
+
     int serverSFD;
     if ((serverSFD = socket(AF_UNIX, SOCK_STREAM,0))==-1)
         errEx();
@@ -155,32 +186,54 @@ void startServer () {
     evClose = eventfd(0,0);
     socketsList = addNode(evClose);
     currSock = socketsList;
+    // Fd evento per reiniziare a monitorare client dopo la gestione di una loro richiesta
+    fdListen = eventfd(0,0);
+    currSock->next = addNode(fdListen);
+    currSock=currSock->next;
     // Client + server + eventFD
-    int maxFd = maxClients + 2;     
+    int maxFd = maxClients + 4;     
     struct pollfd * connectionFDS = calloc(maxFd, sizeof(struct pollfd));
-    memset (connectionFDS, 0, sizeof(struct pollfd)*maxFd);
     connectionFDS[0].fd = serverSFD;
     connectionFDS[0].events = POLLIN;
 
     connectionFDS[1].fd = evClose;
     connectionFDS[1].events = POLLIN;
 
-    for (int i=2; i < maxFd; i++) { 
+    connectionFDS[2].fd = fdListen;
+    connectionFDS[2].events = POLLIN;
+
+    for (int i=3; i < maxFd; i++) { 
         connectionFDS[i].fd = -1;
         connectionFDS[i].events = POLLIN; 
     }
     int pollRes = 0;
     int timeout = 60*1000;      //1 min
 
-    while(TRUE) {
+
+
+    while(!sigiq && !sighup) {
+
+        //Controllo se devo rimettermi in ascolto di fd
+        if (connectionFDS[2].revents == POLLIN) {
+            void * eventB = malloc(8);
+            memset (eventB, 0, 8);
+            read (fdListen, eventB, 8);
+            int toListen = atoi(eventB);
+            printf("Listen: %d\n",toListen);
+            for (int i=3; i<maxFd; i++) {
+                if (connectionFDS[i].fd == toListen) connectionFDS[i].events=POLLIN;
+            }
+            free(eventB);
+        }
 
         //Controllo se devo chiudere una socket prima della poll
         if (connectionFDS[1].revents == POLLIN) {
+            //pthread_mutex_lock(&mutex);   // Maybe gotta lock ???
             void * eventB = malloc(8);
             memset (eventB, 0, 8);
             read (evClose, eventB, 8);
             int * toClose = eventB;
-            for (int i=2; i<maxFd; i++) {       // Voglio chiudere 5, trova solo 3 ???
+            for (int i=3; i<maxFd; i++) {       // Voglio chiudere 5, trova solo 3 ???
                 if (connectionFDS[i].fd == *toClose) connectionFDS[i].fd = -1;
             }
             deleteNode(*toClose,&socketsList);
@@ -203,7 +256,7 @@ void startServer () {
 
         //if client richiede connect
         if (connectionFDS[0].revents == POLLIN) {
-            int j = 2;
+            int j = 3;
             while(connectionFDS[j].fd!=-1 && j<maxFd) j++; 
             //controllo se ho spazio per gestire più client
             if (j<=maxFd) {
@@ -219,13 +272,11 @@ void startServer () {
             else printf ("Tentata connessione\n");
         }
 
-        //Se un client già connesso ha un'altra richiesta
-        for (int i=2;i<maxFd;i++){
+        //Se un client già connesso ha una richiesta
+        for (int i=3;i<maxFd;i++){
             if (connectionFDS[i].revents==POLLIN && connectionFDS[i].fd!=-1) {
                 pthread_mutex_lock(&mutex);
-                printf("Add to req list: %d\n",connectionFDS[i].fd);    //TEST
                 if (requestsQueue == NULL) {
-                    // TEST: non inserisce nodo dopo write???? UPDATE: Sembra inserire correttamente
                     requestsQueue = addNode(connectionFDS[i].fd);
                     lastRequest = requestsQueue;
                 }
@@ -233,11 +284,29 @@ void startServer () {
                     lastRequest->next = addNode(connectionFDS[i].fd);
                     lastRequest=lastRequest->next;
                 }
+                printf("Add to req list with count %d: %d\n",listCount(requestsQueue),connectionFDS[i].fd);    //TEST
+                connectionFDS[i].events = 0;
                 pthread_cond_signal(&newReq);
                 pthread_mutex_unlock(&mutex);
             }
         }
 
+    }
+    if (sigiq) {
+        //for (int i=0;i<threadQuantity;i++) {
+        //    pthread_kill (workers[i],SIGKILL);
+        //}
+        cleanup(workers,threadQuantity, socketsList);
+        _exit(EXIT_SUCCESS);
+    }
+    if (sighup) {
+        connectionFDS[0].fd = -1;
+        while (requestsQueue!=NULL) wait();
+        //for (int i=0;i<threadQuantity;i++) {
+        //    pthread_kill (workers[i],SIGKILL);
+        //}
+        cleanup(workers,threadQuantity, socketsList);
+        _exit(EXIT_SUCCESS);
     }
     free (connectionFDS);
 }
@@ -291,6 +360,11 @@ fileNode * initStorage(FILE * f, char * fname, int fOwner){
 
 void * manageRequest() {
 
+    /*// Setto le sigmask per far gestire i segnali solo da thread master
+    sigset_t * sigmask;
+    if (sigfillset(sigmask)==-1) errEx();
+    if (pthread_sigmask (SIG_SETMASK, sigmask, NULL) != 0) errEx(); */
+
     //fd associato alla richiesta attuale
     int currentRequest;
 
@@ -300,8 +374,8 @@ void * manageRequest() {
         pthread_mutex_lock(&mutex);
         while (requestsQueue==NULL ) pthread_cond_wait(&newReq,&mutex);
         currentRequest = requestsQueue->descriptor;
-        printf("Serving: %d\n",currentRequest);                  //TEST : 5, 0 dopo write
-        requestsQueue = popNode(requestsQueue);       // FREE invalid pointer after write
+        printf("Serving: %d\n",currentRequest);
+        requestsQueue = popNode(requestsQueue);
         if (requestsQueue==NULL) lastRequest=NULL;
 
         ssize_t reqRes = 1;
@@ -309,7 +383,6 @@ void * manageRequest() {
         void * buffer = malloc(tr);
         memset (buffer, 0, tr);
         void * toFree = buffer;
-        memset (buffer, 0, tr);
         size_t totBytesR=0;
 
         while (tr>0 && reqRes!=0) {
@@ -320,11 +393,12 @@ void * manageRequest() {
             totBytesR+=reqRes;
             tr-=reqRes;
         }
+        pthread_mutex_unlock(&mutex);
 
         // Creo una copia del buffer per tokenizzare
         char * tk = calloc(MAX_BUF_SIZE, sizeof(char));
         memcpy (tk,(char *)buffer,MAX_BUF_SIZE);
-        
+
         // Tolgo il terminatore dalla richiesta, formato: codiceOp,nomeFile,Contenuto
         char * request;
         char * ptr;
@@ -333,7 +407,6 @@ void * manageRequest() {
         // Tokenizzo il codice
         char * opCode = strtok_r(request, ",",&ptr);
         int code = atoi(opCode);
-        pthread_mutex_unlock(&mutex);
 
         printf("%d %s\n",code,request); //TEST
         char * reqArg;
@@ -345,6 +418,7 @@ void * manageRequest() {
                 reqArg = strtok_r(NULL, EOBUFF,&ptr);
                 if (reqArg == NULL) {
                     logOperation(RD, currentRequest, FAILURE, reqArg);
+                    writeListenFd (currentRequest);
                     sendAnswer (currentRequest, FAILURE);
                 }
 
@@ -354,10 +428,12 @@ void * manageRequest() {
                     // Controllo la presenza del file, lo invio se trovato altrimento riporto il fallimento
                     if (searchFile(reqArg, storage, &fToRd)==-1) {
                         logOperation(RD, currentRequest, FAILURE, reqArg);
+                        writeListenFd (currentRequest);
                         sendAnswer(currentRequest, FAILURE);
                     }
                     else if (sendFile(currentRequest, fToRd)==-1) {
                         logOperation(RD, currentRequest, FAILURE, reqArg);
+                        writeListenFd (currentRequest);
                         errEx();
                     }
 
@@ -373,6 +449,7 @@ void * manageRequest() {
                 reqArg = strtok_r(NULL, "\n", &ptr);
                 if (reqArg == NULL) {
                     logOperation(WR, currentRequest, FAILURE, reqArg);
+                    writeListenFd (currentRequest);
                     sendAnswer (currentRequest, FAILURE);}
 
                 else {
@@ -401,6 +478,7 @@ void * manageRequest() {
                     fileNode * fToWr;
                     if (searchFile(fileName, storage, &fToWr) == -1) {
                         logOperation(WR, currentRequest, FAILURE, reqArg);
+                        writeListenFd (currentRequest);
                         sendAnswer (currentRequest, FAILURE);
                     }
 
@@ -408,6 +486,7 @@ void * manageRequest() {
                         // Controllo se si dispone dei permessi per scrivere sul file
                         if(fToWr->owner!=0 && fToWr->owner!=currentRequest) {
                             logOperation(WR, currentRequest, FAILURE, reqArg);
+                            writeListenFd (currentRequest);
                             sendAnswer(currentRequest,FAILURE);
                         }
                         else {
@@ -448,6 +527,7 @@ void * manageRequest() {
                                 free(conToFree);
                                 free(toFree);
                                 logOperation(WR, currentRequest, FAILURE, reqArg);
+                                writeListenFd (currentRequest);
                                 sendAnswer (currentRequest, FAILURE);
                             }
 
@@ -462,6 +542,7 @@ void * manageRequest() {
                                 free(conToFree);
                                 free(toFree);
                                 logOperation(WR, currentRequest, SUCCESS, reqArg);
+                                writeListenFd (currentRequest);
                                 sendAnswer(currentRequest, SUCCESS);
                             }
                         }
@@ -476,6 +557,7 @@ void * manageRequest() {
                 reqArg = strtok_r(NULL, EOBUFF, &ptr);
                 if (reqArg == NULL) {
                     logOperation(OP, currentRequest, FAILURE, reqArg);
+                    writeListenFd (currentRequest);
                     sendAnswer(currentRequest, FAILURE);
                     }
                     
@@ -484,10 +566,12 @@ void * manageRequest() {
                     pthread_mutex_lock(&mutex);
                     if (searchFile(reqArg, storage, &fToOp)==-1) {
                         logOperation(OP, currentRequest, FAILURE, reqArg);
+                        writeListenFd (currentRequest);
                         sendAnswer(currentRequest, FAILURE);
                     }
                     else {
                         logOperation(OP, currentRequest, SUCCESS, reqArg);
+                        writeListenFd (currentRequest);
                         sendAnswer(currentRequest, SUCCESS);
                     }
                     pthread_mutex_unlock(&mutex);
@@ -500,6 +584,7 @@ void * manageRequest() {
                 reqArg = strtok_r (NULL, EOBUFF, &ptr);
                 if (reqArg == NULL) {
                     logOperation(RM, currentRequest, FAILURE, reqArg);
+                    writeListenFd (currentRequest);
                     sendAnswer (currentRequest, FAILURE);
                 }
 
@@ -508,12 +593,14 @@ void * manageRequest() {
                     fileNode * fToRm;
                     if (searchFile(reqArg, storage, &fToRm)==-1) {
                         logOperation(RM, currentRequest, FAILURE, reqArg);
+                        writeListenFd (currentRequest);
                         sendAnswer(currentRequest, FAILURE);
                     }
                     else {
                         deleteFile (fToRm, &storage, &lastAddedFile);
                         fileCount--;
                         logOperation(RM, currentRequest, SUCCESS, reqArg);
+                        writeListenFd (currentRequest);
                         sendAnswer(currentRequest, SUCCESS);
                     }
                     pthread_mutex_unlock(&mutex);
@@ -543,6 +630,7 @@ void * manageRequest() {
                 reqArg = strtok_r (NULL, EOBUFF, &ptr);
                 if (reqArg == NULL) {
                     logOperation(PUC, currentRequest, FAILURE, reqArg);
+                    writeListenFd (currentRequest);
                     sendAnswer (currentRequest, FAILURE);
                 }
 
@@ -551,6 +639,7 @@ void * manageRequest() {
                         storage = initStorage (NULL, reqArg, 0);
                         fileCount++;
                         logOperation(PUC, currentRequest, SUCCESS, reqArg);
+                        writeListenFd (currentRequest);
                         sendAnswer(currentRequest,SUCCESS);
                     }
                     else {
@@ -561,10 +650,12 @@ void * manageRequest() {
                             fileCount++;
                             printf("Last file: %s\n",lastAddedFile->fileName);
                             logOperation(PUC, currentRequest, SUCCESS, reqArg);
+                            writeListenFd (currentRequest);
                             sendAnswer (currentRequest, SUCCESS);
                         }
                         else {
                             logOperation(PUC, currentRequest, FAILURE, reqArg);
+                            writeListenFd (currentRequest);
                             sendAnswer (currentRequest, FAILURE);
                         }
                     }
@@ -580,39 +671,71 @@ void * manageRequest() {
 
                 pthread_mutex_lock(&mutex);
                 fileNode * currentFile = storage;
-                char * msg = NULL;
+                char msg [MAX_NAME_LEN];
+                int res = 0;
 
-                // Leggo tutti i file disponibili
-                if (N==0) {
-                    while (currentFile!=NULL) {
-
-                        // Messaggio al client: nome_file,taglia_file£ contenuto
-                        sprintf(msg,"%s,%li,",currentFile->fileName, currentFile->fileSize);
-
-                        if (write (currentRequest, msg, strlen(msg))==-1) break;
-                        write (currentRequest, EOBUFF, EOB_SIZE);
-
-                        sendFile(currentRequest,currentFile);
-                        currentFile=currentFile->next;
-                        }
-                }
-
-                // Leggo N file
+                // Invio al client il numero di file disponibili che invierò
+                char availableF [32];
+                int max;
+                if (N==0 || N>fileCount) {
+                    max = fileCount;
+                    sprintf(availableF, "%d£",fileCount);}
                 else {
-                    int j=1;
-                    while (currentFile!=NULL && j<=N && j<=fileCount) {
-                        sprintf(msg,"%s,%li,",currentFile->fileName, currentFile->fileSize);
-
-                        if (write (currentRequest, msg, strlen(msg))==-1) break;
-                        write (currentRequest, EOBUFF, EOB_SIZE);
-
-                        sendFile(currentRequest,currentFile);
-                        currentFile=currentFile->next;
-                        j++;                    
+                    max = N;
+                    sprintf(availableF, "%d£",N);}
+            
+                size_t nToWrite = sizeof(char) * strlen(availableF);
+                ssize_t nWritten = 1;
+                size_t totBytesWritten = 0;
+                while ( nToWrite > 0 && nWritten!=0) {
+                    if ((nWritten = write(currentRequest, availableF+totBytesWritten, nToWrite))==-1) {
+                        res = -1;
+                        goto logs;
                     }
-
+                    nToWrite -= nWritten;
+                    totBytesWritten += nWritten;
                 }
-                logOperation (RDM, currentRequest,0,NULL);
+
+                // Aspetto che il client mi dica di procedere com l'invio dei file
+                void * ack = malloc(MAX_BUF_SIZE);
+                size_t nToRead = MAX_BUF_SIZE;
+                ssize_t nRead = 1;
+                ssize_t totBytesRead = 0;
+                while (nToRead > 0 && nRead!=0) {
+                    if (totBytesRead!=0 && bufferCheck(ack)==1) break;
+                    if ((nRead = read(currentRequest,ack+totBytesRead,nToRead)==-1)) return -1;
+                    totBytesRead += nRead;
+                    nToRead -= nRead;
+                }
+                free (ack);
+                
+
+                // Invio max file ognuno preceduto da un header con nome e taglia
+                for (int i=0;i<max;i++) {
+                    
+                    sprintf (msg, "%s,%li£", currentFile->fileName, currentFile->fileSize);
+                    printf("Header: %s %d\n",msg,sizeof(char)*strlen(msg));
+
+                    nToWrite = sizeof(char) * strlen (msg);
+                    nWritten = 1;
+                    totBytesWritten = 0;
+                    while (nToWrite>0 && nWritten!=0){
+                        if ((nWritten=write (currentRequest, msg+totBytesWritten, nToWrite))==-1) {
+                            res = -1;
+                            break;
+                        }
+                        totBytesWritten+=nWritten;
+                        nToWrite-=nWritten;
+                    }
+                    printf("Written: %d\n",totBytesWritten);
+
+                    sendFile(currentRequest,currentFile);
+                    currentFile=currentFile->next;
+                }
+                
+                logs:
+                logOperation (RDM, currentRequest,res,NULL);
+                writeListenFd (currentRequest);
                 pthread_mutex_unlock(&mutex);
                 break;
             }
@@ -631,6 +754,7 @@ void * manageRequest() {
                 reqArg = strtok_r (NULL, EOBUFF, &ptr);
                 if (reqArg == NULL) {
                     logOperation(PRC,currentRequest,FAILURE,reqArg);
+                    writeListenFd (currentRequest);
                     sendAnswer (currentRequest, FAILURE);
                 }
 
@@ -639,6 +763,7 @@ void * manageRequest() {
                         storage = initStorage (NULL, reqArg, currentRequest);
                         fileCount++;
                         logOperation(PRC,currentRequest,SUCCESS,reqArg);
+                        writeListenFd (currentRequest);
                         sendAnswer(currentRequest,SUCCESS);
                     }
                     else {
@@ -649,10 +774,12 @@ void * manageRequest() {
                             fileCount++;
                             printf("Last file: %s\n",lastAddedFile->fileName);
                             logOperation(PRC,currentRequest,SUCCESS,reqArg);
+                            writeListenFd (currentRequest);
                             sendAnswer (currentRequest, SUCCESS);
                         }
                         else {
                             logOperation (PRC,currentRequest,FAILURE,reqArg);
+                            writeListenFd (currentRequest);
                             sendAnswer (currentRequest, FAILURE);
                         }
                     }
@@ -666,6 +793,7 @@ void * manageRequest() {
                 reqArg = strtok_r (NULL, EOBUFF, &ptr);
                 if (reqArg == NULL) {
                     logOperation (ULC, currentRequest, FAILURE, reqArg);
+                    writeListenFd (currentRequest);
                     sendAnswer (currentRequest, FAILURE);
                 }
 
@@ -676,16 +804,19 @@ void * manageRequest() {
 
                     if (res==-1) {
                         logOperation (ULC, currentRequest, FAILURE, reqArg);
+                        writeListenFd (currentRequest);
                         sendAnswer(currentRequest, FAILURE);
                     }
                     else {
                         if (fToUnl->owner==currentRequest) { 
                             fToUnl->owner=0;
                             logOperation (ULC, currentRequest, SUCCESS, reqArg);
+                            writeListenFd (currentRequest);
                             sendAnswer(currentRequest,SUCCESS);
                         }
                         else {
                             logOperation (ULC, currentRequest, FAILURE, reqArg);
+                            writeListenFd (currentRequest);
                             sendAnswer(currentRequest, FAILURE);
                         }
                     }
@@ -698,7 +829,8 @@ void * manageRequest() {
             case LCK: {
                 reqArg = strtok_r (NULL, EOBUFF, &ptr);
                 if (reqArg == NULL) {
-                    logOperation (LCK, currentRequest, FAILURE, reqArg);    
+                    logOperation (LCK, currentRequest, FAILURE, reqArg);
+                    writeListenFd (currentRequest);
                     sendAnswer (currentRequest, FAILURE);
                 }
 
@@ -708,13 +840,15 @@ void * manageRequest() {
                     int res = searchFile (reqArg, storage, &fToLc);
 
                     if (res==-1) {
-                        logOperation (LCK, currentRequest, FAILURE, reqArg);       
+                        logOperation (LCK, currentRequest, FAILURE, reqArg);
+                        writeListenFd (currentRequest);       
                         sendAnswer(currentRequest, FAILURE);
                     }
                     else {
-                        if (fToLc->owner==currentRequest || fToLc->owner==0) { 
+                        if (fToLc->owner == currentRequest || fToLc->owner==0) { 
                             fToLc->owner = currentRequest;
-                            logOperation (LCK, currentRequest, SUCCESS, reqArg);    
+                            logOperation (LCK, currentRequest, SUCCESS, reqArg);
+                            writeListenFd (currentRequest);
                             sendAnswer(currentRequest,SUCCESS);
                         }
                         else {
@@ -739,28 +873,10 @@ void * manageRequest() {
                 TEST
                 break;
         }
-
+    
     free (toFree);
     free (tk);
     }
-}
-
-int sendAnswer (int fd, int res) {
-    char ansStr [MAX_BUF_SIZE];
-    if (res == SUCCESS) strcpy(ansStr,"0\0");
-    else strcpy(ansStr,"-1\0");
-
-    size_t writeSize = sizeof(char) * strlen (ansStr);
-    void * buffer = malloc(MAX_BUF_SIZE);
-    memset (buffer, 0, MAX_BUF_SIZE);
-    strcpy (buffer, ansStr);
-
-    ssize_t nWritten = write(fd, buffer, writeSize);
-    write(fd, EOBUFF, EOB_SIZE);
-
-    free (buffer);
-    if (nWritten==-1) return -1;
-    return 0;
 }
 
 int sendFile (int fd, fileNode * f) {
@@ -852,4 +968,20 @@ void logOperation (int op, int process, int res, char * file) {
                 break;
             }
     }
+}
+
+void * setIqFl () {
+    sigiq = 1;
+}
+
+void * setShFl () {
+    sighup = 1;
+}
+
+void * writeListenFd (int fd) {
+
+    char toListen [8];
+    sprintf (toListen,"%d",fd);
+    if (write (fdListen, toListen, 8) ==-1) errEx();
+
 }

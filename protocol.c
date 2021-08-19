@@ -31,3 +31,21 @@ int nameFromPath (char * fullpath, char ** name) {
     } 
 
 }
+
+int sendAnswer (int fd, int res) {
+    char ansStr [MAX_BUF_SIZE];
+    if (res == SUCCESS) strcpy(ansStr,"0\0");
+    else strcpy(ansStr,"-1\0");
+
+    size_t writeSize = sizeof(char) * strlen (ansStr);
+    void * buffer = malloc(MAX_BUF_SIZE);
+    memset (buffer, 0, MAX_BUF_SIZE);
+    strcpy (buffer, ansStr);
+
+    ssize_t nWritten = write(fd, buffer, writeSize);
+    write(fd, EOBUFF, EOB_SIZE);
+
+    free (buffer);
+    if (nWritten==-1) return -1;
+    return 0;
+}

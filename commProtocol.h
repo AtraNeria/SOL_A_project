@@ -55,4 +55,9 @@ int bufferCheck(void * buffer);
 */
 int nameFromPath (char * fullpath, char ** name);
 
+/* Invia esito res di un'operazione sulla socket fd.
+    Restituisce 0 se l'invio ha successo, -1 altrimenti
+*/
+int sendAnswer (int fd, int res);
+
 #endif

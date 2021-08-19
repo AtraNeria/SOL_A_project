@@ -96,5 +96,6 @@ int searchString (const char * string, strNode * list);
 */
 int closeString (const char * string, strNode ** list);
 
+int listCount (node * list);
 
 #endif

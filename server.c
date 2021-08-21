@@ -32,14 +32,19 @@ fileNode * initStorage(FILE * f, char * fname, int fOwner);
 */
 int sendFile (int file, fileNode * f);
 
+/* Aspetta che il client legato alla socket fd invii una risposta di feedback.
+    Restituisce 0 se lo riceve con successo. -1 altrimenti
+*/
+int waitForAck (int fd);
+
 /* Segnala sull'eventfd fdListen fd
 */
-void * writeListenFd (int fd);
+void writeListenFd (int fd);
 
 // Setta la flag sigiq_flag in caso di ricezione SIGINT o SIGQUIT
-void * setIqFl ();
+void setIqFl ();
 // Setta la flag sighup_flag in caso di ricezione SIGHUP
-void * setShFl ();
+void setShFl ();
 
 // Flags settate dalla gestione dei segnali
 int sigiq;
@@ -301,7 +306,7 @@ void startServer () {
     }
     if (sighup) {
         connectionFDS[0].fd = -1;
-        while (requestsQueue!=NULL) wait();
+        //while (requestsQueue!=NULL) wait();
         //for (int i=0;i<threadQuantity;i++) {
         //    pthread_kill (workers[i],SIGKILL);
         //}
@@ -455,13 +460,15 @@ void * manageRequest() {
                 else {
                     pthread_mutex_lock(&mutex);
                     // Salvo richiesta completa
-                    char fullRequest [MAX_BUF_SIZE];
+                    char fullRequest [MAX_NAME_LEN];
+                    memset (fullRequest,0, sizeof(char)* MAX_NAME_LEN);
                     strcpy(fullRequest,WRITE);
                     strcat(fullRequest,reqArg);
                     int reqLen = strlen(fullRequest)+1;
 
                     // Ne faccio una copia da tokenizzate
-                    char toTok[reqLen];
+                    char toTok [reqLen];
+                    memset (toTok,0,sizeof(char)*reqLen);
                     strcpy(toTok,fullRequest);
 
                     // Estraggo la taglia del file
@@ -476,18 +483,17 @@ void * manageRequest() {
 
                     // Controllo che il file sia stato creato
                     fileNode * fToWr;
+                    int res = 0;
                     if (searchFile(fileName, storage, &fToWr) == -1) {
-                        logOperation(WR, currentRequest, FAILURE, reqArg);
-                        writeListenFd (currentRequest);
-                        sendAnswer (currentRequest, FAILURE);
+                        res = -1;
+                        goto logging;
                     }
 
                     else {
                         // Controllo se si dispone dei permessi per scrivere sul file
                         if(fToWr->owner!=0 && fToWr->owner!=currentRequest) {
-                            logOperation(WR, currentRequest, FAILURE, reqArg);
-                            writeListenFd (currentRequest);
-                            sendAnswer(currentRequest,FAILURE);
+                            res = -1;
+                            goto logging;
                         }
                         else {
                             // Scrivo il contenuto eventualmente letto nel buffer precedente
@@ -526,24 +532,32 @@ void * manageRequest() {
                             if (readRes == -1) {
                                 free(conToFree);
                                 free(toFree);
-                                logOperation(WR, currentRequest, FAILURE, reqArg);
-                                writeListenFd (currentRequest);
-                                sendAnswer (currentRequest, FAILURE);
+                                res = -1;
+                                goto logging;
+
                             }
 
                             // Altrimenti salvo il file e segnalo l'azione avvenuta con successo
                             else {
                                 if (fToWr->fPointer==NULL) {
-                                    FILE * newF = fmemopen(NULL,fSize,"w+");
-                                    fwrite(content,sizeof(char),fSize, newF);
+                                    FILE * newF = fmemopen(NULL,fSize+1,"w+");
+                                    size_t r = fwrite(content,1,fSize, newF);
+                                    if (r!=fSize) {
+                                        res = -1;
+                                        free(conToFree);
+                                        free(toFree);
+                                        TEST
+                                        goto logging;
+                                    }
                                     fToWr->fPointer=newF;
                                     fToWr->fileSize=fSize;
                                 }
                                 free(conToFree);
                                 free(toFree);
-                                logOperation(WR, currentRequest, SUCCESS, reqArg);
+                                logging:
+                                logOperation(WR, currentRequest, res, reqArg);
                                 writeListenFd (currentRequest);
-                                sendAnswer(currentRequest, SUCCESS);
+                                sendAnswer(currentRequest, res);
                             }
                         }
                     }
@@ -696,19 +710,17 @@ void * manageRequest() {
                     totBytesWritten += nWritten;
                 }
 
-                // Aspetto che il client mi dica di procedere com l'invio dei file
-                void * ack = malloc(MAX_BUF_SIZE);
-                size_t nToRead = MAX_BUF_SIZE;
-                ssize_t nRead = 1;
-                ssize_t totBytesRead = 0;
-                while (nToRead > 0 && nRead!=0) {
-                    if (totBytesRead!=0 && bufferCheck(ack)==1) break;
-                    if ((nRead = read(currentRequest,ack+totBytesRead,nToRead)==-1)) return -1;
-                    totBytesRead += nRead;
-                    nToRead -= nRead;
+                // Se non ho file da inviare loggo il fallimento dell'operazione
+                if (max==0) {
+                    res = -1;
+                    goto logs;
                 }
-                free (ack);
-                
+
+                // Aspetto che il client mi dica di procedere com l'invio dei file
+                if (waitForAck(currentRequest)==-1) {
+                    res = -1;
+                    goto logs;
+                }                
 
                 // Invio max file ognuno preceduto da un header con nome e taglia
                 for (int i=0;i<max;i++) {
@@ -728,9 +740,19 @@ void * manageRequest() {
                         nToWrite-=nWritten;
                     }
                     printf("Written: %d\n",totBytesWritten);
-
-                    sendFile(currentRequest,currentFile);
+                    
+                    // Aspetto l'ok del client e invio il file
+                    if (waitForAck(currentRequest)==-1) {
+                        res=-1;
+                        break;}
+                    res = sendFile(currentRequest,currentFile);
+                    if (res==-1) goto logs;
                     currentFile=currentFile->next;
+
+                    // Aspetto feedback dal client prima di procedere con il file successivo
+                    if (waitForAck(currentRequest)==-1) {
+                        res=-1;
+                        break;}
                 }
                 
                 logs:
@@ -885,11 +907,16 @@ int sendFile (int fd, fileNode * f) {
     void * buff = malloc(writeSize);
     memset (buff, 0, writeSize);
     void * toFree = buff;
-    fread (buff, sizeof(char), writeSize, f->fPointer);
-    if (!feof(f->fPointer)) {
+    fseek (f->fPointer,0,SEEK_SET);
+    size_t r = fread (buff, 1, writeSize, f->fPointer);
+
+    // Se non ho letto tutto il file nel buffer e c'è un errore
+    if (r!=writeSize && !feof(f->fPointer)) {
         free (buff);
         return -1;
     }
+    printf ("SEND %li of: %s\n",r,(char*)buff);   //TEST
+    fseek (f->fPointer,0,SEEK_END);
 
     // Invio al client
     ssize_t nWritten;
@@ -970,18 +997,39 @@ void logOperation (int op, int process, int res, char * file) {
     }
 }
 
-void * setIqFl () {
+void setIqFl () {
     sigiq = 1;
 }
 
-void * setShFl () {
+void setShFl () {
     sighup = 1;
 }
 
-void * writeListenFd (int fd) {
+void writeListenFd (int fd) {
 
-    char toListen [8];
+    char * toListen = calloc(8,1);
     sprintf (toListen,"%d",fd);
-    if (write (fdListen, toListen, 8) ==-1) errEx();
+    if (write (fdListen, toListen, 8) ==-1) {
+        free (toListen);
+        errEx();}
+    free (toListen);
+}
 
+int waitForAck (int fd) {
+    int res = 0;
+    void * ack = malloc(MAX_BUF_SIZE);
+    size_t nToRead = MAX_BUF_SIZE;
+    ssize_t nRead = 1;
+    ssize_t totBytesRead = 0;
+    while (nToRead > 0 && nRead!=0) {
+        if (totBytesRead!=0 && bufferCheck(ack)==1) break;
+        if ((nRead = read(fd,ack+totBytesRead,nToRead)==-1)) {
+            res = -1;
+            break;
+            }
+        totBytesRead += nRead;
+        nToRead -= nRead;
+    }
+    free (ack);
+    return res;
 }

@@ -1,5 +1,5 @@
 CC = gcc
-FLAGS = -Wall
+FLAGS = -Wall -g
 OBJECTS = api.o client.o server.o main.o list.o protocol.o
 TARGETS = main.out client.out
 

@@ -1,6 +1,7 @@
 #include "commProtocol.h"
 #include <string.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 int bufferCheck(void * buffer){
     char * b = malloc(sizeof(char)*MAX_FILE_SIZE);

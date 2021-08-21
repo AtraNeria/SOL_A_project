@@ -134,7 +134,7 @@ int main (int argc, char ** argv){
             case 'W': {
                 if (connOpen){
                     if (optarg!=NULL) {
-                        char * args = calloc(strlen(optarg),sizeof(char));
+                        char * args = calloc(strlen(optarg)+1,sizeof(char));
                         char * saveptr;
                         strcpy(args, optarg);
                         char * currArg = strtok_r(args, ",", &saveptr);

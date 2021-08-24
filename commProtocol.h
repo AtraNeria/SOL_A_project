@@ -1,6 +1,8 @@
 #ifndef _COMMUNICATION_PROTOCOL_H
 #define _COMMUNICATION_PROTOCOL_H
 
+#include <sys/types.h>
+
 // Codici operazioni su connessione
 #define CC 3            // Apertura connessione con client
 #define OC 5            // Chiusura  connessione con client
@@ -58,6 +60,6 @@ int nameFromPath (char * fullpath, char ** name);
 /* Invia esito res di un'operazione sulla socket fd.
     Restituisce 0 se l'invio ha successo, -1 altrimenti
 */
-int sendAnswer (int fd, int res);
+int sendAnswer (int fd, ssize_t res);
 
 #endif

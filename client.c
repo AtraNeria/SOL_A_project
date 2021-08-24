@@ -139,9 +139,13 @@ int main (int argc, char ** argv){
                         strcpy(args, optarg);
                         char * currArg = strtok_r(args, ",", &saveptr);
 
-                        if (writeFile(currArg,expelledFiles)==-1) errEx();
+                        if (writeFile(currArg,expelledFiles)==-1) {
+                            free(args);
+                            errEx();}
                         while ((currArg = strtok_r(NULL,", ", &saveptr))!=NULL){
-                            if (writeFile(currArg,expelledFiles)==-1) errEx();
+                            if (writeFile(currArg,expelledFiles)==-1) {
+                                free(args);
+                                errEx();}
                         }
                         free(args);
                     }
@@ -159,13 +163,27 @@ int main (int argc, char ** argv){
                     if (optarg!=NULL) {
                         char * rArgs = calloc(strlen(optarg),sizeof(char));
                         strcpy(rArgs, optarg);
-                        char * fToRead = strtok(rArgs,",");
-                        void * buffer= malloc(MAX_FILE_SIZE);
-                        memset (buffer, 0, MAX_FILE_SIZE);
-                        size_t bufferSize;
-                        if (readFile(fToRead, &buffer, &bufferSize)==-1) errEx();
-                        while ((fToRead = strtok(NULL, ","))!=NULL) {
-                            if (readFile(fToRead, &buffer, &bufferSize)==-1) errEx();
+                        char * ptr;
+                        char * fToRead = strtok_r(rArgs,",",&ptr);
+                        void * buffer=NULL;
+                        size_t bufferSize=0;
+
+                        if (readFile(fToRead, &buffer, &bufferSize)==-1) {
+                            free(rArgs);
+                            errEx();
+                        }
+                        free(buffer);
+                        buffer = NULL;
+                        bufferSize =0;
+
+                        while ((fToRead = strtok_r(NULL, ",",&ptr))!=NULL) {
+                            void * buff=NULL;
+                            size_t s=0;
+                            if (readFile(fToRead, &buff, &s)==-1) {
+                                free (rArgs);
+                                errEx();
+                            }
+                            free(buff);
                         }
                         free(rArgs);
                     }
@@ -243,8 +261,20 @@ int main (int argc, char ** argv){
             case 'c': {
                 if (connOpen){
                     if (optarg!=NULL) {
-                        if (removeFile(optarg)==-1)
-                            errEx();
+                        char * args = calloc(strlen(optarg)+1,sizeof(char));
+                        char * saveptr;
+                        strcpy(args, optarg);
+
+                        char * currArg = strtok_r(args, ",", &saveptr);
+                        if (removeFile(currArg)==-1) {
+                            free (args);
+                            errEx();}
+                        while ((currArg = strtok_r(NULL,", ", &saveptr))!=NULL) {
+                            if (removeFile(currArg)==-1) {
+                                free(args);
+                                errEx();}
+                        }
+                        free(args);
                     }
                     else printWarning(NO_ARG);
                 }

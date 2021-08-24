@@ -1,6 +1,7 @@
 #include "commProtocol.h"
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <unistd.h>
 
 int bufferCheck(void * buffer){
@@ -33,20 +34,28 @@ int nameFromPath (char * fullpath, char ** name) {
 
 }
 
-int sendAnswer (int fd, int res) {
+int sendAnswer (int fd, ssize_t res) {
     char ansStr [MAX_BUF_SIZE];
-    if (res == SUCCESS) strcpy(ansStr,"0\0");
-    else strcpy(ansStr,"-1\0");
+    sprintf (ansStr,"%li£",res);
 
     size_t writeSize = sizeof(char) * strlen (ansStr);
-    void * buffer = malloc(MAX_BUF_SIZE);
-    memset (buffer, 0, MAX_BUF_SIZE);
+    void * buffer = malloc(writeSize);
+    memset (buffer, 0, writeSize);
     strcpy (buffer, ansStr);
 
-    ssize_t nWritten = write(fd, buffer, writeSize);
-    write(fd, EOBUFF, EOB_SIZE);
+    size_t nToWrite = writeSize;
+    ssize_t nWritten = 1;
+    size_t totBytesWritten = 0;
+
+    while (nToWrite>0 && nWritten!=0) {
+        if ((nWritten = write(fd, buffer+totBytesWritten, nToWrite))==-1) {
+            free(buffer);
+            return -1;
+        }
+        nToWrite -= nWritten;
+        totBytesWritten += nWritten;
+    }
 
     free (buffer);
-    if (nWritten==-1) return -1;
     return 0;
 }

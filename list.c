@@ -91,7 +91,6 @@ fileNode * popFile (fileNode * list){
 
 void deleteFile (fileNode * f, fileNode ** storage, fileNode ** lastAddedFile) {
 
-
         if(f == *lastAddedFile) *lastAddedFile=f->prev;
         if(f == *storage) *storage=f->next;
 
@@ -103,7 +102,7 @@ void deleteFile (fileNode * f, fileNode ** storage, fileNode ** lastAddedFile) {
         // Non è in coda
         if (n != NULL) n->prev = p;
         
-        fclose(f->fPointer);
+        if (f->fPointer!=NULL) fclose(f->fPointer);
         free (f->fileName);
         free(f);
 }

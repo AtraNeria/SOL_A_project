@@ -422,27 +422,31 @@ void * manageRequest() {
             case RD: {
                 reqArg = strtok_r(NULL, EOBUFF,&ptr);
                 if (reqArg == NULL) {
+                    pthread_mutex_lock(&mutex);
                     logOperation(RD, currentRequest, FAILURE, reqArg);
                     writeListenFd (currentRequest);
                     sendAnswer (currentRequest, FAILURE);
+                    pthread_mutex_unlock(&mutex);
                 }
 
                 else {
                     pthread_mutex_lock(&mutex);
                     fileNode * fToRd;
-                    // Controllo la presenza del file, lo invio se trovato altrimento riporto il fallimento
-                    if (searchFile(reqArg, storage, &fToRd)==-1) {
-                        logOperation(RD, currentRequest, FAILURE, reqArg);
-                        writeListenFd (currentRequest);
-                        sendAnswer(currentRequest, FAILURE);
-                    }
-                    else if (sendFile(currentRequest, fToRd)==-1) {
-                        logOperation(RD, currentRequest, FAILURE, reqArg);
-                        writeListenFd (currentRequest);
-                        errEx();
-                    }
+                    int res = 0;
 
+                    // Controllo la presenza
+                    if ((res=searchFile(reqArg, storage, &fToRd))==-1) goto log;
+                    printf ("FILE: %s\n",fToRd->fileName);
+                    printf("SIZE: %li\n",fToRd->fileSize);
+                    // Invio la taglia
+                    if ((res=sendAnswer(currentRequest,fToRd->fileSize))==-1) goto log;
+                    // Invio il contenuto
+                    if ((res=sendFile(currentRequest,fToRd))==-1) goto log;
+
+                    // Se l'invio fallisce lo riporto
+                    log:
                     logOperation(RD, currentRequest, SUCCESS, reqArg);
+                    writeListenFd (currentRequest);
                     pthread_mutex_unlock(&mutex);
                 }
 
@@ -546,7 +550,6 @@ void * manageRequest() {
                                         res = -1;
                                         free(conToFree);
                                         free(toFree);
-                                        TEST
                                         goto logging;
                                     }
                                     fToWr->fPointer=newF;
@@ -605,10 +608,11 @@ void * manageRequest() {
                 else {
                     pthread_mutex_lock(&mutex);
                     fileNode * fToRm;
+                    // Se il file non esiste l'operazione ha automaticamente successo
                     if (searchFile(reqArg, storage, &fToRm)==-1) {
-                        logOperation(RM, currentRequest, FAILURE, reqArg);
+                        logOperation(RM, currentRequest, SUCCESS, reqArg);
                         writeListenFd (currentRequest);
-                        sendAnswer(currentRequest, FAILURE);
+                        sendAnswer(currentRequest, SUCCESS);
                     }
                     else {
                         deleteFile (fToRm, &storage, &lastAddedFile);
@@ -929,7 +933,7 @@ int sendFile (int fd, fileNode * f) {
         writeSize -= nWritten;
         totBytesWritten += nWritten;
     }
-    write(fd, EOBUFF, EOB_SIZE);
+    write(fd, EOBUFF, EOB_SIZE);    // SU RDM A VOLTE FINISCE NELL'HEADER SUCCESSIVO TEST
     free (toFree);
     return 0; 
 }
@@ -1018,6 +1022,7 @@ void writeListenFd (int fd) {
 int waitForAck (int fd) {
     int res = 0;
     void * ack = malloc(MAX_BUF_SIZE);
+    void * toFree = ack;
     size_t nToRead = MAX_BUF_SIZE;
     ssize_t nRead = 1;
     ssize_t totBytesRead = 0;
@@ -1030,6 +1035,6 @@ int waitForAck (int fd) {
         totBytesRead += nRead;
         nToRead -= nRead;
     }
-    free (ack);
+    free (toFree);
     return res;
 }

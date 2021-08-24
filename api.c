@@ -48,9 +48,9 @@ ssize_t writeAndRead(void * bufferToWrite, void ** bufferToRead, size_t bufferSi
 */
 int saveFile (void * buffer, const char * dirName, const char * pathname, size_t size);
 
-/* Legge size bytes di buffer e restituisce la risposta contenutavi.
+/* Legge size bytes di buffer e restituisce la risposta contenutavi alla richiesta query.
 */
-int getAnswer(void ** buffer, size_t size);
+ssize_t getAnswer(void ** buffer, size_t size, int query);
 
 
 int openConnection (const char* sockname, int msec, const struct timespec abstime) {     //see timespec_get (da settare nel client prima della chiamata)
@@ -181,7 +181,7 @@ int openFile (const char* pathname, int flags){
         if (writeAndRead(buffer,&buffRead, nToWrite-1, MAX_BUF_SIZE)==-1) FREE_RET;
     }
 
-    int answer = getAnswer(&buffRead, MAX_BUF_SIZE);
+    int answer = getAnswer(&buffRead, MAX_BUF_SIZE, OP);
     free (toFreeWrite);
     free (toFree);
 
@@ -217,7 +217,10 @@ int readFile (const char * pathname, void ** buf, size_t* size) {
 
     //Controllo se il file è già aperto
     int fState = searchString(pathname,openFiles);
-    if (fState ==-1) openFile(pathname, 0);   // Se non è presente lo apro
+    // Se non è presente tento di aprirlo
+    if (fState == -1) {
+        if (openFile(pathname, 0)==-1) return -1;
+    }   
     if (fState == 0) {  // Se è stato chiuso in precedenza non posso più operare sul file
         errno = EPERM;
         return -1;
@@ -232,19 +235,69 @@ int readFile (const char * pathname, void ** buf, size_t* size) {
     strcat(buffer, pathname);
     ssize_t result;
 
-    //Invio richiesta
-    result = writeAndRead(buffer, buf, nToWrite-1, MAX_FILE_SIZE);
-    SET_LO;
+    // Alloco spazio per la risposta
+    void * buff = malloc(sizeof(char)*32);
+    memset (buff,0,sizeof(char)*32);
+    void * freeRes = buff;
 
-    //Se ho avuto successo salvo il file nella cartella specificata (se lo è stata) per i file letti
-    if (result!=-1 && dirReadFiles!=NULL) {
-        if (saveFile(buffer, dirReadFiles, pathname, MAX_FILE_SIZE)==-1) {
-            free (buffer);
+    //Invio richiesta
+    if (writeAndRead(buffer, buff, nToWrite-1, sizeof(char)*32)==-1) {
+        free (toFreeWrite);
+        free (freeRes);
+        return -1;
+    }
+    char string[MAX_BUF_SIZE];
+    strcpy (string, (char*)buff);
+    char * tok = strtok(string,EOBUFF);
+    result = atol(tok);
+    printf("SIZE: %li from %s\n",result,string);    //TEST
+
+    // Alloco spazio per il file
+    void * content = malloc(result);
+    memset (content,0,result);
+    void * ptr = content;
+
+    // Salvo contenuto finito insieme all'header
+    char header [MAX_BUF_SIZE];
+    sprintf (header,"%li£",result);
+    int headerLen = strlen (header) ;
+    buff+=headerLen;
+    ssize_t partialSize = MAX_BUF_SIZE - headerLen;
+    if (partialSize<result) memcpy (content,buff,partialSize);
+    else memcpy (content, buff, result);
+
+
+    // Leggo il contenuto restante
+    ssize_t nToRd = result - partialSize;
+    ssize_t nRead = 1;
+    size_t totBytes = 0;
+    while (nToRd>0 && nRead!=0) {
+        if (totBytes!=0 && bufferCheck(content)==1) break;
+        if ((nRead = read(clientSFD,content+totBytes,nToRd)==-1)) {
+            free (toFreeWrite);
+            free (freeRes);
+            free(ptr);
+            return -1;
+        }
+        totBytes += nRead;
+        nToRd -= nRead;
+    }
+
+    // Eventualmente salvo il file su disco
+    if (dirReadFiles!=NULL) {
+        if ((saveFile(ptr,dirReadFiles,pathname,result))==-1) {
+            free (toFreeWrite);
+            free (freeRes);
+            free(ptr);
             return -1;
         }
     }
+
+    // Assegno i puntatori richiesti dal client
+    * buf = ptr;
+    * size = result;
     free (toFreeWrite);
-    *size = result;
+    free (freeRes);
 
     //Se le stampe sono abilitate stampo l'esito
     PROP(RD,pathname,0,*size)
@@ -274,9 +327,10 @@ int readNFiles (int N, const char* dirname) {
         free(buff);
         return -1;
     }
-    N = getAnswer(&buff,MAX_BUF_SIZE);
+    N = getAnswer(&buff,MAX_BUF_SIZE,RDM);
     printf("Available files: %d\n",N);
     free (tmp);
+    free(toFreeWrite);
 
     // Riporto al client un errore se il server non ha file da inviare
     if (N==0) {
@@ -297,7 +351,6 @@ int readNFiles (int N, const char* dirname) {
 
         char * tk; // token tmp
         size_t fileSize; // taglia del file
-        char infoIndex[MAX_BUF_SIZE]; // header completo
         char pathName[MAX_NAME_LEN];  // nome file
 
         // Leggo header sul file e ne faccio una copia
@@ -308,7 +361,6 @@ int readNFiles (int N, const char* dirname) {
             printf("To read :%d\n",nToRd);
             if (totBytes!=0 && bufferCheck(buffRead)!=0) break;
             if ((nRead=read(clientSFD,buffRead+totBytes,nToRd))==-1) {
-                free(toFreeWrite);
                 free(toFree);
                 return -1;
             }
@@ -327,19 +379,24 @@ int readNFiles (int N, const char* dirname) {
         tk = strtok(NULL, EOBUFF);
         fileSize = atol(tk);
 
-        // Dico al server di procedere con il contenuto del file e lo leggo
+        // Salvo eventuale contenuto che possa essere finito nel buffer dell'header
         void * content = malloc (fileSize);
         memset (content, 0, fileSize);
         void * freePtr = content;
-
-        sendAnswer(clientSFD,SUCCESS);
         nToRd = fileSize ; 
+
+        if ((tk=strtok(NULL,EOBUFF))!=NULL) {
+            memcpy(content,tk,sizeof(char)*strlen(tk));
+            nToRd-=sizeof(char)*strlen(tk);
+        }
+
+        // Segnalo al server di procedere con l'invio del contenuto del file
         nRead = 1;
         totBytes = 0;
+        sendAnswer(clientSFD,SUCCESS);
         while (nToRd>0 && nRead!=0) {
             if (totBytes!=0 && bufferCheck(content)!=0) break;
             if ((nRead=read(clientSFD,content+totBytes,nToRd))==-1) {
-                free(buffer);
                 free(toFree);
                 free(freePtr);
                 return -1;
@@ -352,15 +409,13 @@ int readNFiles (int N, const char* dirname) {
         if (dirname!=NULL) saveFile(freePtr, dirname, pathName, fileSize);
 
         //Se le stampe sono abilitate stampo l'esito
-        if (pOpt_met) printOpRes(RD,pathName,0,totBytes);
+        PROP(RD,pathName,0,totBytes)
         free (freePtr);        
-        free (toFreeWrite);
         free (toFree);
         j++;
         //Segnalo al server di poter proseguire col prossimo file
         sendAnswer(clientSFD,SUCCESS);
     } 
-
     return j;    
 }
 
@@ -482,7 +537,7 @@ int appendToFile (const char* pathname, void* buf, size_t size, const char* dirn
     }
 
     // leggo codice di risposta: Success o Failure
-    int res = getAnswer(&buffRead,MAX_BUF_SIZE);
+    int res = getAnswer(&buffRead,MAX_BUF_SIZE, WR);
     free (toFree);
     return res;
 }
@@ -514,7 +569,7 @@ int lockFile(const char* pathname){
         FREE_RET
     }
     else {
-        int answer = getAnswer(&buffRead,MAX_BUF_SIZE);
+        int answer = getAnswer(&buffRead,MAX_BUF_SIZE,LCK);
         free (toFreeWrite);
         free (toFree);
         PROP(LCK,pathname,answer,0)
@@ -550,7 +605,7 @@ int unlockFile(const char* pathname){
         FREE_RET
     }
     else {
-        int answer = getAnswer(&buffRead,MAX_BUF_SIZE);
+        int answer = getAnswer(&buffRead,MAX_BUF_SIZE,ULC);
         free (toFreeWrite);
         free (toFree);
         PROP(ULC,pathname,answer,0)
@@ -588,7 +643,7 @@ int removeFile (const char* pathname){
 
     // Se ha avuto successo riporto l'esito della rimozione
     else {
-        int answer = getAnswer(&buffRead,MAX_BUF_SIZE);
+        int answer = getAnswer(&buffRead,MAX_BUF_SIZE,RM);
         free (toFreeWrite);
         free (toFree);
         // Se è stato rimosso da server chiudo il file da lato client
@@ -617,7 +672,7 @@ ssize_t writeAndRead (void * bufferToWrite, void ** bufferToRead, size_t bufferS
     
     //write finchè non ho scritto tutti i byte del buffer
     size_t nToWrite = bufferSize;
-    ssize_t nWritten=1;
+    ssize_t nWritten = 1;
     size_t totBytesWritten = 0;
 
     printf("%s\n",(char*)bufferToWrite);    //TEST
@@ -672,16 +727,16 @@ int saveFile (void * buffer, const char * dirName, const char * pathname, size_t
 
 }
 
-int getAnswer(void ** buffer, size_t size) {
+ssize_t getAnswer(void ** buffer, size_t size, int query) {
     char * string = calloc(size, sizeof(char));
     memcpy(string, (char*)buffer, sizeof(char)*size);
 
     char * toTok;
     toTok = strtok(string,EOBUFF);
 
-    int res = atoi(toTok);
+    ssize_t res = atoi(toTok);
     free (string);
-    if (res==1) return -1;
+    if (query!=RDM && query!=RD && res==1) return -1;
     return res;
 }
 

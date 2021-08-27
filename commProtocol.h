@@ -45,6 +45,7 @@
 // Codici esiti operazioni
 #define SUCCESS 0
 #define FAILURE -1
+#define EXPEL -2
 
 
 /* Controlla se i byte size di buffer sono terminati dai caratteri terminatori EOBUFF.

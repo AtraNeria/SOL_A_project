@@ -43,6 +43,19 @@ strNode * openFiles = NULL;
 */
 ssize_t writeAndRead(void * bufferToWrite, void ** bufferToRead, size_t bufferSize, size_t answer);
 
+/* Legge da server un file preceduto da header per l'operazione op.
+    Restituisce 0 se ha successo, -1 altrimenti.
+    In caso di successo il puntatore content punterà al contenuto del file, 
+    pathname al suo nome e size alla sua taglia
+*/
+int getHeader_File (void ** content, void ** pathname, size_t * size, int op);
+
+/* Legge i file vittima espulsi dal server. 
+    Se è stata specificata una cartella con l'opzione -D vengono salvati.
+    In caso di successo restituisce 0, -1 altrimenti
+*/
+int getExpelledFile ();
+
 /* Salva nella cartella dirName il file pathname letto il cui contenuto è in buffer, di grandezza size.
     Restituisce -1 in caso di fallimento settando errno, 0 in caso di successo
 */
@@ -135,13 +148,20 @@ int openFile (const char* pathname, int flags){
 
             // creo un file
             case O_CREATE:
+
                 nToWrite = sizeof(char)*(strlen(PUB_CREATE)+fNameLen) + 1;  //buffer da inviare a server
                 buffer = malloc(nToWrite);
                 memset (buffer, 0, nToWrite);
                 toFreeWrite = buffer;
                 strcpy (buffer, PUB_CREATE);
                 strcat (buffer,pathname);
-                if (writeAndRead(buffer, &buffRead, nToWrite-1, MAX_BUF_SIZE)==-1) FREE_RET;
+
+                if (writeAndRead(buffer, &buffRead, nToWrite-1, MAX_BUF_SIZE)==-1) FREE_RET;    // STUCK
+
+                // Se il server mi risponde con l'espulsione di un file
+                if (getAnswer(&buffRead,MAX_BUF_SIZE,PUC)==EXPEL) {
+                    if (getExpelledFile() == -1) FREE_RET
+                }
                 break;
 
 
@@ -162,6 +182,11 @@ int openFile (const char* pathname, int flags){
                 strcpy (buffer, PRIV_CREATE);
                 strcat (buffer,pathname);
                 if (writeAndRead(buffer,&buffRead, nToWrite, MAX_BUF_SIZE)==-1) FREE_RET;
+
+                // Se il server mi risponde con l'espulsione di un file
+                if (getAnswer(&buffRead,MAX_BUF_SIZE,PUC)==EXPEL) {
+                    if (getExpelledFile() == -1) FREE_RET
+                }
                 break;
 
             default:
@@ -344,74 +369,28 @@ int readNFiles (int N, const char* dirname) {
     // Ciclo per leggere un file alla volta e copiarlo, finchè non ne leggo N
     int j = 1;
     while (j<=N) {
+        void * content;
+        void * pathname;
+        size_t size;
 
-        void * buffRead = malloc (MAX_BUF_SIZE);
-        memset (buffRead, 0, MAX_BUF_SIZE);
-        void * toFree = buffRead;
+        // Leggo il file preceduto da un header
+        if (getHeader_File(&content,&pathname,&size,RDM)==-1) return -1;
 
-        char * tk; // token tmp
-        size_t fileSize; // taglia del file
-        char pathName[MAX_NAME_LEN];  // nome file
-
-        // Leggo header sul file e ne faccio una copia
-        ssize_t nToRd = MAX_BUF_SIZE;
-        ssize_t nRead = 1;
-        size_t totBytes = 0;
-        while (nToRd>0 && nRead!=0) {
-            printf("To read :%d\n",nToRd);
-            if (totBytes!=0 && bufferCheck(buffRead)!=0) break;
-            if ((nRead=read(clientSFD,buffRead+totBytes,nToRd))==-1) {
-                free(toFree);
-                return -1;
-            }
-            nToRd-=nRead;
-            totBytes +=nRead;
-        }
-        printf("Header letto: %s\n",(char *)buffRead);
-        char toTok [MAX_BUF_SIZE];
-        strcpy (toTok,(char*)buffRead);
-
-        // Estraggo il nome da buffer
-        tk = strtok(toTok,",");
-        strcpy(pathName, tk);
-
-        // Estraggo la taglia
-        tk = strtok(NULL, EOBUFF);
-        fileSize = atol(tk);
-
-        // Salvo eventuale contenuto che possa essere finito nel buffer dell'header
-        void * content = malloc (fileSize);
-        memset (content, 0, fileSize);
-        void * freePtr = content;
-        nToRd = fileSize ; 
-
-        if ((tk=strtok(NULL,EOBUFF))!=NULL) {
-            memcpy(content,tk,sizeof(char)*strlen(tk));
-            nToRd-=sizeof(char)*strlen(tk);
-        }
-
-        // Segnalo al server di procedere con l'invio del contenuto del file
-        nRead = 1;
-        totBytes = 0;
-        sendAnswer(clientSFD,SUCCESS);
-        while (nToRd>0 && nRead!=0) {
-            if (totBytes!=0 && bufferCheck(content)!=0) break;
-            if ((nRead=read(clientSFD,content+totBytes,nToRd))==-1) {
-                free(toFree);
-                free(freePtr);
-                return -1;
-            }
-            nToRd-=nRead;
-            totBytes +=nRead;
+        // Ricavo il nome per salvare eventualmente il file
+        char * saveName = calloc  (MAX_NAME_LEN, sizeof(char));
+        if (nameFromPath(pathname,&saveName)==-1) {
+            free (saveName);
+            free (content);
+            return -1;
         }
 
         // Se specificata una cartella salvo il file
-        if (dirname!=NULL) saveFile(freePtr, dirname, pathName, fileSize);
+        if (dirname!=NULL) saveFile(content, dirname, saveName, size);
 
         //Se le stampe sono abilitate stampo l'esito
-        PROP(RD,pathName,0,totBytes)
-        free (freePtr);        
-        free (toFree);
+        PROP(RD,pathname,0,size)
+        free (content);        
+        free (saveName);
         j++;
         //Segnalo al server di poter proseguire col prossimo file
         sendAnswer(clientSFD,SUCCESS);
@@ -442,6 +421,7 @@ int writeFile (const char* pathname, const char* dirname){
     // Apro file in locale 
     FILE * fToWrite; 
     if ((fToWrite = fopen(pathname, "r+") )== NULL) {
+        printf ("Open failure: %s\n",pathname);     //TEST
         PROP(WR,pathname,-1,0)
         return -1;
     }
@@ -496,6 +476,7 @@ int writeFile (const char* pathname, const char* dirname){
         fclose(fToWrite);
         return -1;
     }
+
     free(buffer);
     PROP(WR,pathname,0,fileSize)
     if (fclose(fToWrite) == EOF) return -1;
@@ -551,19 +532,18 @@ int lockFile(const char* pathname){
         return -1;
     }
 
-    // Stringa di richiesta
-    size_t bufferSize = sizeof(char) * (strlen(UNLOCK)+fNameLen) +1;
-    void * buffer = malloc(bufferSize);
-    memset (buffer, 0, bufferSize);
+    // Stringa di richiesta: 4096,pathname,timeout
+    char * buffer = calloc(MAX_BUF_SIZE,sizeof(char));
+    sprintf (buffer,"%s,%s,%d",LOCK_F,pathname,msec);
+    int bufferSize = strlen(buffer)+1;
+    // Buffer in cui salvo la risposta
     void * buffRead = malloc(MAX_BUF_SIZE);
     memset (buffRead, 0, MAX_BUF_SIZE);
+    // Puntatori iniziali per free
     void * toFreeWrite = buffer;
     void * toFree = buffRead;
     
-    strcpy (buffer, UNLOCK);
-    strcat (buffer, pathname);
     int result;
-
     if ((result = writeAndRead(buffer,&buffRead,bufferSize-1,MAX_BUF_SIZE))==-1) {
         PROP(LCK,pathname,result,0)
         FREE_RET
@@ -689,7 +669,7 @@ ssize_t writeAndRead (void * bufferToWrite, void ** bufferToRead, size_t bufferS
 
     //aspetto il tempo di risposta
     sleep(msec * 0.001);
-    
+
     //leggo la risposta del server
     while (nToRead > 0 && nRead!=0) {
         if (totBytesRead!=0 && bufferCheck(bufferToRead)==1) break;
@@ -774,4 +754,101 @@ void printOpRes (int op, const char * fname, int res, size_t bytes) {
     default:
         break;
     }
+}
+
+int getHeader_File (void ** content, void ** pathname, size_t * size, int op){
+
+        void * buffRead = malloc (MAX_BUF_SIZE);
+        memset (buffRead, 0, MAX_BUF_SIZE);
+        void * toFree = buffRead;
+
+        char * tk; // token tmp
+        size_t fileSize; // taglia del file
+        char pathName[MAX_NAME_LEN];  // nome file
+
+        // Leggo header sul file e ne faccio una copia
+        ssize_t nToRd = MAX_BUF_SIZE;
+        ssize_t nRead = 1;
+        size_t totBytes = 0;
+        while (nToRd>0 && nRead!=0) {
+            printf("To read :%d\n",nToRd);
+            if (totBytes!=0 && bufferCheck(buffRead)!=0) break;
+            if ((nRead=read(clientSFD,buffRead+totBytes,nToRd))==-1) {
+                free(toFree);
+                return -1;
+            }
+            nToRd-=nRead;
+            totBytes +=nRead;
+        }
+        printf("Header letto: %s\n",(char *)buffRead);
+        char toTok [MAX_BUF_SIZE];
+        strcpy (toTok,(char*)buffRead);
+
+        // Estraggo il nome da buffer
+        tk = strtok(toTok,",");
+        strcpy(pathName, tk);
+
+        // Estraggo la taglia
+        tk = strtok(NULL, EOBUFF);
+        fileSize = atol(tk);
+
+        // Salvo eventuale contenuto che possa essere finito nel buffer dell'header
+        void * file = malloc (fileSize);
+        memset (file, 0, fileSize);
+        void * freePtr = file;
+        nToRd = fileSize ; 
+
+        if ((tk=strtok(NULL,EOBUFF))!=NULL) {
+            memcpy(file,tk,sizeof(char)*strlen(tk));
+            nToRd-=sizeof(char)*strlen(tk);
+        }
+
+        // Segnalo al server di procedere con l'invio del contenuto del file
+        nRead = 1;
+        totBytes = 0;
+        if (op == RDM) sendAnswer(clientSFD,SUCCESS);
+        while (nToRd>0 && nRead!=0) {
+            if (totBytes!=0 && bufferCheck(file)!=0) break;
+            if ((nRead=read(clientSFD,file+totBytes,nToRd))==-1) {
+                free (freePtr);
+                free (toFree);
+                return -1;
+            }
+            nToRd-=nRead;
+            totBytes +=nRead;
+        }
+        free(toFree);
+        * pathname = pathName;
+        * content = file;
+        * size = fileSize;
+        return 0;
+}
+
+int getExpelledFile () {
+    // Segnalo di poter ricevere il file
+    sendAnswer(clientSFD,SUCCESS);
+    void * content;
+    void * pathname;
+    size_t size;
+
+    // Leggo il file preceduto da un header
+    if (getHeader_File(&content,&pathname,&size,PUC)==-1) return -1;
+
+    // Ricavo il nome per salvare eventualmente il file
+    char * saveName = calloc  (MAX_NAME_LEN, sizeof(char));
+    if (nameFromPath(pathname,&saveName)==-1) {
+        free (saveName);
+        free (content);
+        return -1;
+    }
+    int res = 0;
+
+    // Se ho specificato una cartella per i file espulsi salvo il file
+    if (expelledFiles!=NULL) {res = saveFile(content,expelledFiles,saveName,size);}
+    if (res==-1) {
+        free (saveName);
+        free(content);
+        return -1;
+    }
+    return 0;
 }

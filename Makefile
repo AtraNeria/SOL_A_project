@@ -54,7 +54,24 @@ test1:
 	make all
 	mv ./main.out ./client.out ./Test1
 
-cleantest:
+test2:
+	make all
+	mv ./main.out ./client.out ./Test2
+
+cleantest1:
 	rm ./Test1/log.txt ./Test1/server ./Test1/client.out ./Test1/main.out
 	rm ./Test1/ReadFile/*
 	make cleanall
+
+cleantest2:
+	rm ./Test2/log.txt ./Test2/server ./Test2/client.out ./Test2/main.out
+	rm ./Test2/Read/*
+	make cleanall
+
+cleantestAll:
+	rm ./Test1/log.txt ./Test1/server ./Test1/client.out ./Test1/main.out
+	rm ./Test1/ReadFile/*
+	rm ./Test2/log.txt ./Test2/server ./Test2/client.out ./Test2/main.out
+	rm ./Test2/Read/*
+	make cleanall
+

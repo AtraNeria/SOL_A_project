@@ -27,15 +27,27 @@ void cleanup(pthread_t workers[], int index, node * socket_list);
 //inizializza lo storage all'arrivo del primo file; ne ritorna il puntatore
 fileNode * initStorage(FILE * f, char * fname, int fOwner);
 
-/* Invia un file f al client fd.
+/* Invia un file f al client fd per l'operazione di codice op.
     Restituisce 0 se l'invio ha successo, -1 altrimenti
 */
-int sendFile (int file, fileNode * f);
+int sendFile (int file, fileNode * f, int op);
+
+/*  Invia al client fd un header riguardante un file contenente il suo
+    nome pathname e la sua taglia size.
+    Restituisce 0 se l'invio ha successo, -1 altrimenti
+*/
+int sendHeader (int fd, char * pathname, ssize_t size);
 
 /* Aspetta che il client legato alla socket fd invii una risposta di feedback.
     Restituisce 0 se lo riceve con successo. -1 altrimenti
 */
 int waitForAck (int fd);
+
+/* Espelle un file per permettere l'operazione op su file fName richiesta dal client fd.
+    Il file vittima viene inviato al client.
+    Restituisce 0 in caso successo, -1 altrimenti
+*/
+int expelFile (int fd, int op, char * fName);
 
 /* Segnala sull'eventfd fdListen fd
 */
@@ -64,12 +76,16 @@ pthread_cond_t newReq = PTHREAD_COND_INITIALIZER;
 pthread_cond_t fileUnlocked = PTHREAD_COND_INITIALIZER;
 
 int fileCount = 0;
+ssize_t usedBytes = 0;
 fileNode * storage=NULL;
 fileNode * lastAddedFile=NULL;
 
 int evClose;
 int fdListen;
 
+// Macro per le operazioni standard di fine richiesta; la prima include l'invio di una risposta al client
+#define END_REQ(OP) logOperation(OP, currentRequest, res, reqArg);writeListenFd(currentRequest);sendAnswer(currentRequest, res);
+#define END_NOANSW(OP) logOperation(OP, currentRequest, res, reqArg);writeListenFd(currentRequest);
 
 
 void errEx () {
@@ -224,7 +240,7 @@ void startServer () {
             memset (eventB, 0, 8);
             read (fdListen, eventB, 8);
             int toListen = atoi(eventB);
-            printf("Listen: %d\n",toListen);
+            printf("Listen: %d\n\n",toListen);  //TEST
             for (int i=3; i<maxFd; i++) {
                 if (connectionFDS[i].fd == toListen) connectionFDS[i].events=POLLIN;
             }
@@ -418,48 +434,44 @@ void * manageRequest() {
 
         switch (code) {
 
-            // Richiesta di lettura
+            // Richiesta di lettura //
             case RD: {
+                int res = 0;
                 reqArg = strtok_r(NULL, EOBUFF,&ptr);
                 if (reqArg == NULL) {
                     pthread_mutex_lock(&mutex);
-                    logOperation(RD, currentRequest, FAILURE, reqArg);
-                    writeListenFd (currentRequest);
-                    sendAnswer (currentRequest, FAILURE);
+                    res = -1;
+                    END_NOANSW(RD)
                     pthread_mutex_unlock(&mutex);
                 }
 
                 else {
                     pthread_mutex_lock(&mutex);
                     fileNode * fToRd;
-                    int res = 0;
 
                     // Controllo la presenza
-                    if ((res=searchFile(reqArg, storage, &fToRd))==-1) goto log;
+                    if ((res=searchFile(reqArg, storage, &fToRd))==-1) {END_NOANSW(RD)}
                     printf ("FILE: %s\n",fToRd->fileName);
                     printf("SIZE: %li\n",fToRd->fileSize);
                     // Invio la taglia
-                    if ((res=sendAnswer(currentRequest,fToRd->fileSize))==-1) goto log;
+                    if ((res=sendAnswer(currentRequest,fToRd->fileSize))==-1) {END_NOANSW(RD)}
                     // Invio il contenuto
-                    if ((res=sendFile(currentRequest,fToRd))==-1) goto log;
+                    if ((res=sendFile(currentRequest,fToRd,RD))==-1) {END_NOANSW(RD)}
 
                     // Se l'invio fallisce lo riporto
-                    log:
-                    logOperation(RD, currentRequest, SUCCESS, reqArg);
-                    writeListenFd (currentRequest);
                     pthread_mutex_unlock(&mutex);
                 }
 
                 break;
             }
                 
-            // Richiesta di scrittura
+            // Richiesta di scrittura //
             case WR: {
+                int res = 0;
                 reqArg = strtok_r(NULL, "\n", &ptr);
                 if (reqArg == NULL) {
-                    logOperation(WR, currentRequest, FAILURE, reqArg);
-                    writeListenFd (currentRequest);
-                    sendAnswer (currentRequest, FAILURE);}
+                    res = -1;
+                    END_REQ(WR)}
 
                 else {
                     pthread_mutex_lock(&mutex);
@@ -490,16 +502,21 @@ void * manageRequest() {
                     int res = 0;
                     if (searchFile(fileName, storage, &fToWr) == -1) {
                         res = -1;
-                        goto logging;
+                        END_REQ(WR)
                     }
 
                     else {
                         // Controllo se si dispone dei permessi per scrivere sul file
                         if(fToWr->owner!=0 && fToWr->owner!=currentRequest) {
                             res = -1;
-                            goto logging;
+                            END_REQ(WR)
                         }
                         else {
+                            // Se posso scrivere controllo di avere spazio disponibile
+                            /*while (usedBytes+fSize > capacity) {
+                                expelFile(currentRequest,WR,fileName);
+                            }*/
+
                             // Scrivo il contenuto eventualmente letto nel buffer precedente
                             void * buff2 = calloc(MAX_BUF_SIZE,1);
                             void * toFree = buff2;
@@ -512,15 +529,9 @@ void * manageRequest() {
                             if (fSize<partialDataLen)
                                 memcpy (content, buff2, fSize);
                             else memcpy (content, buff2, partialDataLen); 
-                            printf("Buffer: %s \n",content);        //TEST
 
                             // Leggo il restante contenuto
                             ssize_t dataToRd = fSize - partialDataLen;
-                            printf("Remaining data: %li\n" 
-                                    "PartialData Lenght: %li\n" 
-                                    "Total size: %d\n" 
-                                    "Request lenght: %d\n",dataToRd,partialDataLen,fSize,reqLen);
-
                             size_t readRes = 1;
                             size_t totDataBytesR = 0;
                             while (dataToRd>0 && readRes!=0) {
@@ -530,14 +541,12 @@ void * manageRequest() {
                                 dataToRd -= readRes;
                             }
                             
-                            printf("Res: %d\nBuffer: %s \n",readRes,content);   //TEST
-
                             // Se ho riscontrato problemi nella lettura indico la client di aver fallito
                             if (readRes == -1) {
                                 free(conToFree);
                                 free(toFree);
                                 res = -1;
-                                goto logging;
+                                END_REQ(WR);
 
                             }
 
@@ -550,17 +559,17 @@ void * manageRequest() {
                                         res = -1;
                                         free(conToFree);
                                         free(toFree);
-                                        goto logging;
+                                        END_REQ(WR)
+                                        pthread_mutex_unlock(&mutex);
+                                        break;
                                     }
                                     fToWr->fPointer=newF;
                                     fToWr->fileSize=fSize;
+                                    usedBytes += fSize;
                                 }
                                 free(conToFree);
                                 free(toFree);
-                                logging:
-                                logOperation(WR, currentRequest, res, reqArg);
-                                writeListenFd (currentRequest);
-                                sendAnswer(currentRequest, res);
+                                END_REQ(WR)
                             }
                         }
                     }
@@ -569,60 +578,57 @@ void * manageRequest() {
                 break;
             }
                 
-            // Apertura di un file
+            // Apertura di un file //
             case OP: {
+                int res = 0;
                 reqArg = strtok_r(NULL, EOBUFF, &ptr);
+                pthread_mutex_lock(&mutex);
                 if (reqArg == NULL) {
-                    logOperation(OP, currentRequest, FAILURE, reqArg);
-                    writeListenFd (currentRequest);
-                    sendAnswer(currentRequest, FAILURE);
+                    res = -1;
+                    END_REQ(OP)
                     }
                     
                 else {
                     fileNode * fToOp;
-                    pthread_mutex_lock(&mutex);
                     if (searchFile(reqArg, storage, &fToOp)==-1) {
-                        logOperation(OP, currentRequest, FAILURE, reqArg);
-                        writeListenFd (currentRequest);
-                        sendAnswer(currentRequest, FAILURE);
-                    }
-                    else {
-                        logOperation(OP, currentRequest, SUCCESS, reqArg);
-                        writeListenFd (currentRequest);
-                        sendAnswer(currentRequest, SUCCESS);
-                    }
-                    pthread_mutex_unlock(&mutex);
+                        res = -1;
+                    }   
+                    END_REQ(OP) 
                 }
+                pthread_mutex_unlock(&mutex);
                 break;
             }
 
-            // Rimozione di un file
+            // Rimozione di un file //
             case RM: {
+                int res = 0;
+                pthread_mutex_lock(&mutex);
                 reqArg = strtok_r (NULL, EOBUFF, &ptr);
                 if (reqArg == NULL) {
-                    logOperation(RM, currentRequest, FAILURE, reqArg);
-                    writeListenFd (currentRequest);
-                    sendAnswer (currentRequest, FAILURE);
+                    res = -1;
+                    END_REQ(RM)
                 }
 
                 else {
-                    pthread_mutex_lock(&mutex);
                     fileNode * fToRm;
-                    // Se il file non esiste l'operazione ha automaticamente successo
-                    if (searchFile(reqArg, storage, &fToRm)==-1) {
-                        logOperation(RM, currentRequest, SUCCESS, reqArg);
-                        writeListenFd (currentRequest);
-                        sendAnswer(currentRequest, SUCCESS);
+                    int res;
+                    if ((res=searchFile(reqArg, storage, &fToRm))<=0) {
+                        // Se il file non è in stato locked o locked dal processo richiedente lo posso eliminare
+                        if(res==0 || res==currentRequest) {
+                            usedBytes-= fToRm->fileSize;
+                            deleteFile (fToRm, &storage, &lastAddedFile);
+                            fileCount--;
+                        }
+                        // Se il file non esiste l'operazione ha automaticamente successo
+                        END_REQ(RM)
                     }
+                    // Se il file è locked da un altro processo l'operazione fallisce
                     else {
-                        deleteFile (fToRm, &storage, &lastAddedFile);
-                        fileCount--;
-                        logOperation(RM, currentRequest, SUCCESS, reqArg);
-                        writeListenFd (currentRequest);
-                        sendAnswer(currentRequest, SUCCESS);
+                        res = -1;
+                        END_REQ(RM)
                     }
-                    pthread_mutex_unlock(&mutex);
                 }
+                pthread_mutex_lock(&mutex);
                 break;
             }
 
@@ -634,47 +640,46 @@ void * manageRequest() {
                 break;
             }
 
-            // Creazione di un nuovo file vuoto
+            // Creazione di un nuovo file vuoto //
             case PUC: {
                 pthread_mutex_lock(&mutex);
-                if (fileCount >= capacity) {
-                    while (fileCount>=capacity) {
-                        storage = popFile(storage);
-                        fileCount --;
-                        // TO DO: send expelled files and log
+                printf ("Capacity: %d/%d\n",fileCount,storageDim);
+                int res = 0;
+
+                // Se sono a capacità massima avverto il client dell'espulsione di un file e aspetto feedback
+                if (fileCount == storageDim) {
+                    if (expelFile(currentRequest,PUC,reqArg)==-1) {
+                        res = -1;
+                        END_REQ(PUC)
                     }
                 }
-
+                // Ricavo nome file
                 reqArg = strtok_r (NULL, EOBUFF, &ptr);
                 if (reqArg == NULL) {
-                    logOperation(PUC, currentRequest, FAILURE, reqArg);
-                    writeListenFd (currentRequest);
-                    sendAnswer (currentRequest, FAILURE);
+                    res = -1;
+                    END_REQ(PUC)
                 }
 
+                // Se è il primo file nello storage lo inizializzo
                 else {
                     if (storage == NULL) {
                         storage = initStorage (NULL, reqArg, 0);
                         fileCount++;
-                        logOperation(PUC, currentRequest, SUCCESS, reqArg);
-                        writeListenFd (currentRequest);
-                        sendAnswer(currentRequest,SUCCESS);
+                        END_REQ(PUC)
                     }
                     else {
+                        // Se non è il primo file lo aggiungo
                         fileNode * toCr;
                         if (searchFile(reqArg,storage,&toCr) == -1) {
                             lastAddedFile->next = newFile (NULL, 0, reqArg, 0, &lastAddedFile);
                             lastAddedFile = lastAddedFile->next;
                             fileCount++;
                             printf("Last file: %s\n",lastAddedFile->fileName);
-                            logOperation(PUC, currentRequest, SUCCESS, reqArg);
-                            writeListenFd (currentRequest);
-                            sendAnswer (currentRequest, SUCCESS);
+                            END_REQ(PUC)
                         }
                         else {
-                            logOperation(PUC, currentRequest, FAILURE, reqArg);
-                            writeListenFd (currentRequest);
-                            sendAnswer (currentRequest, FAILURE);
+                            res = -1;
+                            END_REQ(PUC);
                         }
                     }
                     pthread_mutex_unlock(&mutex);
@@ -682,7 +687,7 @@ void * manageRequest() {
                 break;
             }
 
-            // Lettura dei primi n file nello storage
+            // Lettura dei primi n file nello storage //
             case RDM: {
                 reqArg = strtok_r(NULL, EOBUFF, &ptr);
                 int N = atoi(reqArg);
@@ -729,27 +734,17 @@ void * manageRequest() {
                 // Invio max file ognuno preceduto da un header con nome e taglia
                 for (int i=0;i<max;i++) {
                     
-                    sprintf (msg, "%s,%li£", currentFile->fileName, currentFile->fileSize);
-                    printf("Header: %s %d\n",msg,sizeof(char)*strlen(msg));
-
-                    nToWrite = sizeof(char) * strlen (msg);
-                    nWritten = 1;
-                    totBytesWritten = 0;
-                    while (nToWrite>0 && nWritten!=0){
-                        if ((nWritten=write (currentRequest, msg+totBytesWritten, nToWrite))==-1) {
-                            res = -1;
-                            break;
-                        }
-                        totBytesWritten+=nWritten;
-                        nToWrite-=nWritten;
+                    // Invio header
+                    if (sendHeader(currentRequest,currentFile->fileName,currentFile->fileSize)==-1) {
+                        res = -1;
+                        goto logs;
                     }
-                    printf("Written: %d\n",totBytesWritten);
                     
                     // Aspetto l'ok del client e invio il file
                     if (waitForAck(currentRequest)==-1) {
                         res=-1;
                         break;}
-                    res = sendFile(currentRequest,currentFile);
+                    res = sendFile(currentRequest,currentFile,RDM);
                     if (res==-1) goto logs;
                     currentFile=currentFile->next;
 
@@ -760,15 +755,15 @@ void * manageRequest() {
                 }
                 
                 logs:
-                logOperation (RDM, currentRequest,res,NULL);
-                writeListenFd (currentRequest);
+                END_NOANSW(RDM)
                 pthread_mutex_unlock(&mutex);
                 break;
             }
 
-            // Creazione di un file locked
+            // Creazione di un file locked //
             case PRC: {
                 pthread_mutex_lock(&mutex);
+                int res = 0;
                 if (fileCount >= capacity) {
                     while (fileCount>=capacity) {
                         storage = popFile(storage);
@@ -778,19 +773,12 @@ void * manageRequest() {
                 }
 
                 reqArg = strtok_r (NULL, EOBUFF, &ptr);
-                if (reqArg == NULL) {
-                    logOperation(PRC,currentRequest,FAILURE,reqArg);
-                    writeListenFd (currentRequest);
-                    sendAnswer (currentRequest, FAILURE);
-                }
+                if (reqArg == NULL) res = -1;
 
                 else {
                     if (storage == NULL) {
                         storage = initStorage (NULL, reqArg, currentRequest);
                         fileCount++;
-                        logOperation(PRC,currentRequest,SUCCESS,reqArg);
-                        writeListenFd (currentRequest);
-                        sendAnswer(currentRequest,SUCCESS);
                     }
                     else {
                         fileNode * toCr;
@@ -799,99 +787,95 @@ void * manageRequest() {
                             lastAddedFile = lastAddedFile->next;
                             fileCount++;
                             printf("Last file: %s\n",lastAddedFile->fileName);
-                            logOperation(PRC,currentRequest,SUCCESS,reqArg);
-                            writeListenFd (currentRequest);
-                            sendAnswer (currentRequest, SUCCESS);
                         }
-                        else {
-                            logOperation (PRC,currentRequest,FAILURE,reqArg);
-                            writeListenFd (currentRequest);
-                            sendAnswer (currentRequest, FAILURE);
-                        }
+                        else res = -1;
+                        
                     }
-                    pthread_mutex_unlock(&mutex);
                 }
+                END_REQ(PRC)
+                pthread_mutex_unlock(&mutex);
                 break;
             }
 
-            // Unlock di un file
+            // Unlock di un file //
             case ULC: {
+                pthread_mutex_lock(&mutex);
+                int res = 0;
                 reqArg = strtok_r (NULL, EOBUFF, &ptr);
-                if (reqArg == NULL) {
-                    logOperation (ULC, currentRequest, FAILURE, reqArg);
-                    writeListenFd (currentRequest);
-                    sendAnswer (currentRequest, FAILURE);
-                }
+                if (reqArg == NULL) res =-1;
 
                 else {
-                    pthread_mutex_lock(&mutex);
                     fileNode * fToUnl;
-                    int res = searchFile (reqArg, storage, &fToUnl);
+                    // Fallisco se il file non è presente
+                    res = searchFile (reqArg, storage, &fToUnl);
 
-                    if (res==-1) {
-                        logOperation (ULC, currentRequest, FAILURE, reqArg);
-                        writeListenFd (currentRequest);
-                        sendAnswer(currentRequest, FAILURE);
-                    }
-                    else {
+                    if (res!=-1) {
+                        // Successo se il file è acquisito dal processo
                         if (fToUnl->owner==currentRequest) { 
                             fToUnl->owner=0;
-                            logOperation (ULC, currentRequest, SUCCESS, reqArg);
-                            writeListenFd (currentRequest);
-                            sendAnswer(currentRequest,SUCCESS);
                         }
-                        else {
-                            logOperation (ULC, currentRequest, FAILURE, reqArg);
-                            writeListenFd (currentRequest);
-                            sendAnswer(currentRequest, FAILURE);
-                        }
+                        // Fallimento altrimenti
+                        else res = -1;
                     }
-                    pthread_mutex_unlock(&mutex);
                 }
-                break;   
+                END_REQ(ULC)
+                pthread_mutex_unlock(&mutex);
+                break;
             }
 
-            // Lock di un file
+            // Lock di un file //
             case LCK: {
-                reqArg = strtok_r (NULL, EOBUFF, &ptr);
-                if (reqArg == NULL) {
-                    logOperation (LCK, currentRequest, FAILURE, reqArg);
-                    writeListenFd (currentRequest);
-                    sendAnswer (currentRequest, FAILURE);
-                }
+                pthread_mutex_lock(&mutex);
+                int res = 0;
+                reqArg = strtok_r (NULL, ",", &ptr);
+                if (reqArg == NULL) res = -1;
 
                 else {
-                    pthread_mutex_lock(&mutex);
                     fileNode * fToLc;
-                    int res = searchFile (reqArg, storage, &fToLc);
+                    char pathname [MAX_NAME_LEN];
+                    strcpy(pathname,reqArg);
 
-                    if (res==-1) {
-                        logOperation (LCK, currentRequest, FAILURE, reqArg);
-                        writeListenFd (currentRequest);       
-                        sendAnswer(currentRequest, FAILURE);
-                    }
-                    else {
+                    // Se il file non esiste l'operazione fallisce
+                    int res = searchFile (pathname, storage, &fToLc);
+                    if (res!=-1){
+                        
+                        // Se non è locked o è stato già acquisito dal processo l'operazione ha successo
                         if (fToLc->owner == currentRequest || fToLc->owner==0) { 
                             fToLc->owner = currentRequest;
-                            logOperation (LCK, currentRequest, SUCCESS, reqArg);
-                            writeListenFd (currentRequest);
-                            sendAnswer(currentRequest,SUCCESS);
                         }
                         else {
-                            // TO DO: se c'è lho locked come fa a essere rilasciato? Also, control timeout
+                            // Leggo il tempo massimo di attesa per acquisire la lock
+                            int msec = atoi(strtok_r(NULL,EOBUFF,&ptr));
+                            struct timespec timeout;
+                            // Se non specificato default di 1 sec
+                            if (msec==0) msec = 1000;
+                            timeout.tv_nsec = msec * 1000000;
+                            timeout.tv_sec = msec * 0.001;
                             int released = 0;
+                            time_t et = 0;
+                            time_t start = clock();
+
+                            // Ogni volta che viene rilasciato un file sono notificato e controllo se è quello richiesto
                             while (!released) {
-                                pthread_cond_wait(&fileUnlocked,&mutex);
+                                if (pthread_cond_timedwait(&fileUnlocked,&mutex,&timeout)==-1) break;
+                                if ((res = searchFile (pathname, storage, &fToLc))==-1) break;
+                                // Se è stato rilasciato acquisisco lock
                                 if (fToLc->owner==0) {
                                     fToLc->owner=currentRequest;
-                                    released=1;
+                                    released = 1;
                                 }
+                                // Altrimenti riprovo fino a che non lo acquisisco o allo scadere del timeout
+                                et+=clock()-start;
+                                if (et>=timeout.tv_nsec) break;
                             }
 
+                            // Se il tempo scade senza che il file venga rilasciato l'operazione fallisce
+                            if (released!=1) res = -1;
                         }
                     }
-                    pthread_mutex_unlock(&mutex);
                 }
+                END_REQ(LCK)
+                pthread_mutex_unlock(&mutex);
                 break;   
             }
 
@@ -905,7 +889,7 @@ void * manageRequest() {
     }
 }
 
-int sendFile (int fd, fileNode * f) {
+int sendFile (int fd, fileNode * f, int op) {
     //Copio il contenuto del file
     size_t writeSize = f->fileSize;
     void * buff = malloc(writeSize);
@@ -933,7 +917,8 @@ int sendFile (int fd, fileNode * f) {
         writeSize -= nWritten;
         totBytesWritten += nWritten;
     }
-    write(fd, EOBUFF, EOB_SIZE);    // SU RDM A VOLTE FINISCE NELL'HEADER SUCCESSIVO TEST
+    // Per RDM c'è il rischio che EOBUFF finisca nell'header successivo
+    if (op!=RDM) write(fd, EOBUFF, EOB_SIZE);
     free (toFree);
     return 0; 
 }
@@ -1037,4 +1022,51 @@ int waitForAck (int fd) {
     }
     free (toFree);
     return res;
+}
+
+int sendHeader (int fd, char * pathname, ssize_t size) {
+    char s [32];
+    sprintf(s,"%li",size);
+    int headerLen = strlen(pathname)+strlen(",£")+strlen(s);
+    char msg[headerLen+1];
+    sprintf (msg, "%s,%li£", pathname, size);
+    printf("Header: %s %d\n",msg,sizeof(char)*strlen(msg));
+
+    int res = 0;
+    ssize_t nToWrite = sizeof(char) * strlen (msg);
+    ssize_t nWritten = 1;
+    ssize_t totBytesWritten = 0;
+    while (nToWrite>0 && nWritten!=0){
+        if ((nWritten=write (fd, msg+totBytesWritten, nToWrite))==-1) {
+            res = -1;
+            break;
+        }
+        totBytesWritten+=nWritten;
+        nToWrite-=nWritten;
+    }
+    printf("Written: %d\n",totBytesWritten);
+    return res;
+}
+
+int expelFile (int fd, int op, char * fName) {
+    
+    // Se sono a capacità massima avverto il client dell'espulsione di un file e aspetto feedback
+    if (sendAnswer(fd,EXPEL)==-1 || waitForAck(fd)==-1) {
+        logOperation(op, fd, FAILURE, fName);
+        writeListenFd (fd);
+        return -1;
+    }
+
+    // Invio nome e taglia del file da espellere e a seguire il contenuto
+    if (sendHeader(fd,storage->fileName,storage->fileSize) == -1 || sendFile(fd,storage,op)==-1) {
+        logOperation(op, fd, FAILURE, fName);
+        writeListenFd (fd);
+        return -1;
+    }
+
+    // Elimino il file dallo storage
+    usedBytes-= storage->fileSize;
+    storage=popNode(storage);
+    fileCount--;
+    return 0;
 }

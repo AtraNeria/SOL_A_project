@@ -400,8 +400,6 @@ int readNFiles (int N, const char* dirname) {
 
 int writeFile (const char* pathname, const char* dirname){
 
-    printf("%s\n",pathname);
-
     // Controllo lunghezza nome
     size_t fNameLen = strlen(pathname);
     if (fNameLen > MAX_NAME_LEN) {
@@ -485,7 +483,7 @@ int writeFile (const char* pathname, const char* dirname){
 
 int appendToFile (const char* pathname, void* buf, size_t size, const char* dirname){
 
-    //controllo validità nome
+    // Controllo validità nome
     size_t fNameLen = strlen(pathname);
     if (fNameLen > MAX_NAME_LEN) {
         errno = ENAMETOOLONG;
@@ -495,30 +493,64 @@ int appendToFile (const char* pathname, void* buf, size_t size, const char* dirn
     // Creo stringa di richiesta: operazione, size, nomefile
     char opString [MAX_BUF_SIZE];
     memset (opString,0,sizeof(char)*MAX_BUF_SIZE);
-    sprintf(opString, "%d,%li,%s\n",WR,size,pathname);
-    printf("%s\n",opString);    //TEST
+    sprintf(opString, "%d,%li,%s",WR,size,pathname);
+    size_t nToWrite = strlen(opString)*sizeof(char);
 
-    // Invio header richiesta
-    size_t nToWrite = sizeof(char)*strlen(opString);
-    ssize_t nWritten = 1;
-    size_t totBytesWritten=0;
-    while (nToWrite>0 && nWritten!=0){
-        if ((nWritten = write(clientSFD, opString+totBytesWritten, nToWrite))==-1) return -1;
-        totBytesWritten+=nWritten;
-        nToWrite-=nWritten;
-        }
-
-    // Invio file
+    //Alloco buffer per la risposta del server
     void * buffRead = malloc(MAX_BUF_SIZE);
     memset (buffRead, 0, MAX_BUF_SIZE);
     void * toFree = buffRead;
-    if (writeAndRead(buf, &buffRead, size, MAX_BUF_SIZE) ==-1) {
+
+    // Invio la richiesta e leggo la risposta del server
+    if (writeAndRead(opString, &buffRead, nToWrite, MAX_BUF_SIZE) ==-1) {
         free(buffRead);
         return -1;
     }
-
-    // leggo codice di risposta: Success o Failure
     int res = getAnswer(&buffRead,MAX_BUF_SIZE, WR);
+
+    // Resetto buffer
+    free (toFree);
+    buffRead = malloc(MAX_BUF_SIZE);
+    toFree = buffRead;
+
+    // Se il server deve espellere file li ricevo finchè non mi segnala di avere abbastanza spazio
+    while (res==EXPEL) {
+        // Leggo file espulso
+        if (getExpelledFile() == -1) {
+            free(toFree);
+            return -1;
+        }
+
+        // Leggo risposta successiva
+        size_t nToRead = MAX_BUF_SIZE;
+        ssize_t nRead = 1;
+        ssize_t totBytesRead = 0;
+        while (nToRead > 0 && nRead!=0) {
+            if (totBytesRead!=0 && bufferCheck(buffRead)==1) break;
+            if ((nRead = read(clientSFD,buffRead+totBytesRead,nToRead)==-1)) {
+                free(toFree);
+                return -1;
+            }
+            totBytesRead += nRead;
+            nToRead -= nRead;
+        }
+        // Rimango nel loop finchè il server deve espellere file
+        res = getAnswer(&buffRead,MAX_BUF_SIZE,WR);
+        free (toFree);
+        buffRead = malloc(MAX_BUF_SIZE);
+        toFree = buffRead;
+    }
+
+    // Invio file
+    if (res==SUCCESS) {    
+        if (writeAndRead(buf, &buffRead, size, MAX_BUF_SIZE) ==-1) {
+            free(toFree);
+            return -1;
+        }
+        // leggo codice di risposta: Success o Failure
+        res = getAnswer(&buffRead,MAX_BUF_SIZE, WR);
+    }    
+    
     free (toFree);
     return res;
 }
@@ -650,30 +682,32 @@ int closeFile (const char* pathname){
 
 ssize_t writeAndRead (void * bufferToWrite, void ** bufferToRead, size_t bufferSize, size_t answer){
     
-    //write finchè non ho scritto tutti i byte del buffer
+    // Write finchè non ho scritto tutti i byte del buffer
     size_t nToWrite = bufferSize;
     ssize_t nWritten = 1;
     size_t totBytesWritten = 0;
-
-    printf("%s\n",(char*)bufferToWrite);    //TEST
+    printf("%s\n",(char*)bufferToWrite);
     while ( nToWrite > 0 && nWritten!=0) {
-        if ((nWritten = write(clientSFD, bufferToWrite+totBytesWritten, nToWrite))==-1) return -1;
+        if ((nWritten = write(clientSFD, bufferToWrite, nToWrite))==-1) return -1;
+            bufferToWrite+=nWritten;
             nToWrite -= nWritten;
             totBytesWritten += nWritten;
         }
     write(clientSFD,EOBUFF,EOB_SIZE);
 
+
+    // Aspetto il tempo di risposta
+    sleep(msec * 0.001);
+
+
+    // Leggo la risposta del server
     size_t nToRead = answer;
     ssize_t nRead = 1;
     ssize_t totBytesRead = 0;
-
-    //aspetto il tempo di risposta
-    sleep(msec * 0.001);
-
-    //leggo la risposta del server
     while (nToRead > 0 && nRead!=0) {
         if (totBytesRead!=0 && bufferCheck(bufferToRead)==1) break;
-        if ((nRead = read(clientSFD,bufferToRead+totBytesRead,nToRead)==-1)) return -1;
+        if ((nRead = read(clientSFD,bufferToRead,nToRead)==-1)) return -1;
+        bufferToRead+=nRead;
         totBytesRead += nRead;
         nToRead -= nRead;
     }

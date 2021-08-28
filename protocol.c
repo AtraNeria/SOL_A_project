@@ -38,8 +38,9 @@ int sendAnswer (int fd, ssize_t res) {
     char ansStr [MAX_BUF_SIZE];
     sprintf (ansStr,"%li£",res);
 
-    size_t writeSize = sizeof(char) * strlen (ansStr);
+    size_t writeSize = sizeof(char) * strlen (ansStr) + 1;
     void * buffer = malloc(writeSize);
+    void * toFree = buffer;
     memset (buffer, 0, writeSize);
     strcpy (buffer, ansStr);
 
@@ -48,14 +49,15 @@ int sendAnswer (int fd, ssize_t res) {
     size_t totBytesWritten = 0;
 
     while (nToWrite>0 && nWritten!=0) {
-        if ((nWritten = write(fd, buffer+totBytesWritten, nToWrite))==-1) {
-            free(buffer);
+        if ((nWritten = write(fd, buffer, nToWrite))==-1) {
+            free(toFree);
             return -1;
         }
+        buffer += nWritten;
         nToWrite -= nWritten;
         totBytesWritten += nWritten;
     }
 
-    free (buffer);
+    free (toFree);
     return 0;
 }

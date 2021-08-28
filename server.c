@@ -64,7 +64,7 @@ int sighup;
 
 int threadQuantity;
 int storageDim;
-int capacity;
+size_t capacity;
 int queueLenght;
 int maxClients;
 FILE * logging;
@@ -106,7 +106,7 @@ void init (int index, char * string) {
         break;
     
     case 2:
-        capacity=atoi(string);
+        capacity=atol(string);
         break;
 
     case 3:
@@ -393,24 +393,21 @@ void * manageRequest() {
     while(TRUE) {
 
         pthread_mutex_lock(&mutex);
+        // Prelevo fd da servive dalla queue
         while (requestsQueue==NULL ) pthread_cond_wait(&newReq,&mutex);
         currentRequest = requestsQueue->descriptor;
-        printf("Serving: %d\n",currentRequest);
         requestsQueue = popNode(requestsQueue);
         if (requestsQueue==NULL) lastRequest=NULL;
 
+        // Leggo la richiesta
         ssize_t reqRes = 1;
         size_t tr = MAX_BUF_SIZE;
-        void * buffer = malloc(tr);
-        memset (buffer, 0, tr);
+        void * buffer = calloc(tr,1);
         void * toFree = buffer;
-        size_t totBytesR=0;
-
+        size_t totBytesR = 0;
         while (tr>0 && reqRes!=0) {
-            if (totBytesR!=0 && bufferCheck(buffer)==1)
-                    break;
-            if ((reqRes=read(currentRequest, buffer+totBytesR, tr))==-1)
-                errEx();
+            if (totBytesR!=0 && bufferCheck(buffer)==1) break;
+            if ((reqRes=read(currentRequest, buffer+totBytesR, tr))==-1) errEx();
             totBytesR+=reqRes;
             tr-=reqRes;
         }
@@ -426,8 +423,9 @@ void * manageRequest() {
         request = strtok_r(tk,EOBUFF,&ptr);
 
         // Tokenizzo il codice
-        char * opCode = strtok_r(request, ",",&ptr);
-        int code = atoi(opCode);
+        char * tmp = strtok_r(request, ",",&ptr);
+        int code;
+        if (tmp!=NULL) code = atoi(tmp);
 
         printf("%d %s\n",code,request); //TEST
         char * reqArg;
@@ -468,13 +466,11 @@ void * manageRequest() {
             // Richiesta di scrittura //
             case WR: {
                 int res = 0;
-                reqArg = strtok_r(NULL, "\n", &ptr);
-                if (reqArg == NULL) {
-                    res = -1;
-                    END_REQ(WR)}
+                pthread_mutex_lock(&mutex);
+                reqArg = strtok_r(NULL, EOBUFF, &ptr);
+                if (reqArg == NULL) res = -1;    
 
                 else {
-                    pthread_mutex_lock(&mutex);
                     // Salvo richiesta completa
                     char fullRequest [MAX_NAME_LEN];
                     memset (fullRequest,0, sizeof(char)* MAX_NAME_LEN);
@@ -499,66 +495,49 @@ void * manageRequest() {
 
                     // Controllo che il file sia stato creato
                     fileNode * fToWr;
-                    int res = 0;
-                    if (searchFile(fileName, storage, &fToWr) == -1) {
-                        res = -1;
-                        END_REQ(WR)
-                    }
+                    if (searchFile(fileName, storage, &fToWr) == -1) res = -1;
 
                     else {
                         // Controllo se si dispone dei permessi per scrivere sul file
-                        if(fToWr->owner!=0 && fToWr->owner!=currentRequest) {
-                            res = -1;
-                            END_REQ(WR)
-                        }
+                        if(fToWr->owner!=0 && fToWr->owner!=currentRequest) res = -1;
+                           
                         else {
-                            // Se posso scrivere controllo di avere spazio disponibile
-                            /*while (usedBytes+fSize > capacity) {
+                            // Se posso scrivere controllo di avere spazio disponibile; in caso procedo all'espulsione di file vittima
+                            printf("Used bytes: %li/%li and fSize %li\n",usedBytes,capacity,fSize);
+                            while (usedBytes+fSize > capacity) {
                                 expelFile(currentRequest,WR,fileName);
-                            }*/
+                            }
 
-                            // Scrivo il contenuto eventualmente letto nel buffer precedente
-                            void * buff2 = calloc(MAX_BUF_SIZE,1);
-                            void * toFree = buff2;
-                            memcpy (buff2,buffer,MAX_BUF_SIZE);
-
-                            buff2 += reqLen;
-                            size_t partialDataLen = MAX_BUF_SIZE-sizeof(char)*reqLen;
-                            void * content = calloc(fSize, 1);
+                            // Segnalo al client di poter inviare il contenuto del file
+                            sendAnswer(currentRequest,SUCCESS);
+                            void * content = calloc(fSize+EOB_SIZE, 1);
                             void * conToFree = content;
-                            if (fSize<partialDataLen)
-                                memcpy (content, buff2, fSize);
-                            else memcpy (content, buff2, partialDataLen); 
 
-                            // Leggo il restante contenuto
-                            ssize_t dataToRd = fSize - partialDataLen;
+                            ssize_t dataToRd = fSize+EOB_SIZE;
                             size_t readRes = 1;
                             size_t totDataBytesR = 0;
                             while (dataToRd>0 && readRes!=0) {
                                 if (totDataBytesR!=0 && bufferCheck(content)==1) break;
-                                if ((readRes = read(currentRequest, content+totBytesR, dataToRd))== -1) break;
+                                if ((readRes = read(currentRequest, content, dataToRd))== -1) break;
+                                content += readRes;
                                 totDataBytesR += readRes;
                                 dataToRd -= readRes;
                             }
-                            
-                            // Se ho riscontrato problemi nella lettura indico la client di aver fallito
+
+                            // Se ho riscontrato problemi nella lettura dico al client di aver fallito
                             if (readRes == -1) {
                                 free(conToFree);
-                                free(toFree);
                                 res = -1;
-                                END_REQ(WR);
-
                             }
 
                             // Altrimenti salvo il file e segnalo l'azione avvenuta con successo
                             else {
                                 if (fToWr->fPointer==NULL) {
                                     FILE * newF = fmemopen(NULL,fSize+1,"w+");
-                                    size_t r = fwrite(content,1,fSize, newF);
+                                    size_t r = fwrite(conToFree,1,fSize, newF);
                                     if (r!=fSize) {
                                         res = -1;
                                         free(conToFree);
-                                        free(toFree);
                                         END_REQ(WR)
                                         pthread_mutex_unlock(&mutex);
                                         break;
@@ -568,13 +547,18 @@ void * manageRequest() {
                                     usedBytes += fSize;
                                 }
                                 free(conToFree);
-                                free(toFree);
-                                END_REQ(WR)
                             }
                         }
                     }
-                    pthread_mutex_unlock(&mutex);
+                    // Se la scrittura ha fallito ma esiste il file vuoto lo elimino
+                    if (res==-1) {
+                        usedBytes-= fToWr->fileSize;
+                        deleteFile(fToWr,&storage,&lastAddedFile);
+                        fileCount--;
+                    }
                 }
+                END_REQ(WR)
+                pthread_mutex_unlock(&mutex);
                 break;
             }
                 
@@ -1030,7 +1014,7 @@ int sendHeader (int fd, char * pathname, ssize_t size) {
     int headerLen = strlen(pathname)+strlen(",£")+strlen(s);
     char msg[headerLen+1];
     sprintf (msg, "%s,%li£", pathname, size);
-    printf("Header: %s %d\n",msg,sizeof(char)*strlen(msg));
+    printf("Header: %s %li\n",msg,sizeof(char)*strlen(msg));
 
     int res = 0;
     ssize_t nToWrite = sizeof(char) * strlen (msg);
@@ -1044,7 +1028,7 @@ int sendHeader (int fd, char * pathname, ssize_t size) {
         totBytesWritten+=nWritten;
         nToWrite-=nWritten;
     }
-    printf("Written: %d\n",totBytesWritten);
+    printf("Written: %li\n",totBytesWritten);
     return res;
 }
 
@@ -1066,7 +1050,7 @@ int expelFile (int fd, int op, char * fName) {
 
     // Elimino il file dallo storage
     usedBytes-= storage->fileSize;
-    storage=popNode(storage);
+    storage=popFile(storage);
     fileCount--;
     return 0;
 }

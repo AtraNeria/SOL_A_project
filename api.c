@@ -130,7 +130,7 @@ int closeConnection (const char* sockname) {
 
 int openFile (const char* pathname, int flags){
 
-    int fNameLen= strlen(pathname);
+    int fNameLen = strlen(pathname);
     if(fNameLen > MAX_NAME_LEN) {
         errno = ENAMETOOLONG;       //nome file troppo lungo
         return -1;
@@ -266,34 +266,31 @@ int readFile (const char * pathname, void ** buf, size_t* size) {
     void * freeRes = buff;
 
     //Invio richiesta
-    if (writeAndRead(buffer, buff, nToWrite-1, sizeof(char)*32)==-1) {
+    if (writeAndRead(buffer, buff, nToWrite-1, sizeof(char)*32+EOB_SIZE)==-1) {
         free (toFreeWrite);
         free (freeRes);
         return -1;
     }
     char string[MAX_BUF_SIZE];
-    strcpy (string, (char*)buff);
+    strcpy (string, (char*)freeRes);
     char * tok = strtok(string,EOBUFF);
     result = atol(tok);
-    printf("SIZE: %li from %s\n",result,string);    //TEST
+
+    if(result==-1) {
+        free(toFreeWrite);
+        free(freeRes);
+        return -1;
+    }
 
     // Alloco spazio per il file
     void * content = malloc(result);
     memset (content,0,result);
     void * ptr = content;
 
-    // Salvo contenuto finito insieme all'header
-    char header [MAX_BUF_SIZE];
-    sprintf (header,"%li£",result);
-    int headerLen = strlen (header) ;
-    buff+=headerLen;
-    ssize_t partialSize = MAX_BUF_SIZE - headerLen;
-    if (partialSize<result) memcpy (content,buff,partialSize);
-    else memcpy (content, buff, result);
-
+    sendAnswer(clientSFD,SUCCESS);
 
     // Leggo il contenuto restante
-    ssize_t nToRd = result - partialSize;
+    ssize_t nToRd = result+EOB_SIZE;
     ssize_t nRead = 1;
     size_t totBytes = 0;
     while (nToRd>0 && nRead!=0) {
@@ -699,7 +696,6 @@ ssize_t writeAndRead (void * bufferToWrite, void ** bufferToRead, size_t bufferS
     // Aspetto il tempo di risposta
     sleep(msec * 0.001);
 
-
     // Leggo la risposta del server
     size_t nToRead = answer;
     ssize_t nRead = 1;
@@ -830,7 +826,7 @@ int getHeader_File (void ** content, void ** pathname, size_t * size, int op){
         void * file = malloc (fileSize);
         memset (file, 0, fileSize);
         void * freePtr = file;
-        nToRd = fileSize ; 
+        nToRd = fileSize + EOB_SIZE; 
 
         if ((tk=strtok(NULL,EOBUFF))!=NULL) {
             memcpy(file,tk,sizeof(char)*strlen(tk));

@@ -439,24 +439,24 @@ void * manageRequest() {
                 if (reqArg == NULL) {
                     pthread_mutex_lock(&mutex);
                     res = -1;
-                    END_NOANSW(RD)
+                    END_REQ(RD)
                     pthread_mutex_unlock(&mutex);
                 }
 
                 else {
                     pthread_mutex_lock(&mutex);
-                    fileNode * fToRd;
 
-                    // Controllo la presenza
-                    if ((res=searchFile(reqArg, storage, &fToRd))==-1) {END_NOANSW(RD)}
-                    printf ("FILE: %s\n",fToRd->fileName);
-                    printf("SIZE: %li\n",fToRd->fileSize);
+                    // Controllo la presenza del file richiesto
+                    fileNode * fToRd;
+                    if ((res=searchFile(reqArg, storage, &fToRd))==-1) {
+                        res=-1;
+                        END_REQ(RD)
+                    }
                     // Invio la taglia
                     if ((res=sendAnswer(currentRequest,fToRd->fileSize))==-1) {END_NOANSW(RD)}
-                    // Invio il contenuto
-                    if ((res=sendFile(currentRequest,fToRd,RD))==-1) {END_NOANSW(RD)}
-
-                    // Se l'invio fallisce lo riporto
+                    // Aspetto conferma e invio il contenuto
+                    if ((res=waitForAck(currentRequest))==-1 || (res=sendFile(currentRequest,fToRd,RD))==-1) {END_NOANSW(RD)}
+                    else {END_NOANSW(RD)}
                     pthread_mutex_unlock(&mutex);
                 }
 
@@ -879,6 +879,7 @@ int sendFile (int fd, fileNode * f, int op) {
     void * buff = malloc(writeSize);
     memset (buff, 0, writeSize);
     void * toFree = buff;
+    // Mi porto all'inizio del file
     fseek (f->fPointer,0,SEEK_SET);
     size_t r = fread (buff, 1, writeSize, f->fPointer);
 
@@ -887,6 +888,7 @@ int sendFile (int fd, fileNode * f, int op) {
         free (buff);
         return -1;
     }
+    // Torno alla fine del file per prepararlo ad eventuali altre operazioni
     printf ("SEND %li of: %s\n",r,(char*)buff);   //TEST
     fseek (f->fPointer,0,SEEK_END);
 
@@ -901,8 +903,7 @@ int sendFile (int fd, fileNode * f, int op) {
         writeSize -= nWritten;
         totBytesWritten += nWritten;
     }
-    // Per RDM c'è il rischio che EOBUFF finisca nell'header successivo
-    if (op!=RDM) write(fd, EOBUFF, EOB_SIZE);
+    write(fd, EOBUFF, EOB_SIZE);
     free (toFree);
     return 0; 
 }

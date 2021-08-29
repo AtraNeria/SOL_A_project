@@ -66,6 +66,7 @@ cleantest1:
 cleantest2:
 	rm ./Test2/log.txt ./Test2/server ./Test2/client.out ./Test2/main.out
 	rm ./Test2/Read/*
+	rm ./Test2/Expelled/*
 	make cleanall
 
 cleantestAll:

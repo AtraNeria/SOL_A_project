@@ -31,7 +31,7 @@
 #define RD_MUL "1024,"      // Lettura di molteplici file
 #define PRIV_CREATE "2048," // Creazione locked
 #define LOCK_F "4096,"      // Lock
-#define UNLOCK "8192, "     // Unlock 
+#define UNLOCK "8192,"     // Unlock 
 
 #define TEST printf("OK\n");
 #define EOBUFF "£"

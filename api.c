@@ -597,7 +597,7 @@ int unlockFile(const char* pathname){
     }
 
     // Stringa di richiesta
-    size_t bufferSize = sizeof(char) * (strlen(LOCK_F)+fNameLen) +1;
+    size_t bufferSize = sizeof(char) * (strlen(UNLOCK)+fNameLen) +1;
     void * buffer = malloc(bufferSize);
     memset (buffer, 0, bufferSize);
     void * buffRead = malloc(MAX_BUF_SIZE);
@@ -605,7 +605,7 @@ int unlockFile(const char* pathname){
     void * toFreeWrite = buffer;
     void * toFree = buffRead;
     
-    strcpy (buffer, LOCK_F);
+    strcpy (buffer, UNLOCK);
     strcat (buffer, pathname);
     int result;
 

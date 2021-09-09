@@ -795,7 +795,7 @@ void * manageRequest() {
 
                     if (res!=-1) {
                         // Successo se il file è acquisito dal processo
-                        if (fToUnl->owner==currentRequest) { 
+                        if (fToUnl->owner==currentRequest || fToUnl->owner==0) {
                             fToUnl->owner=0;
                         }
                         // Fallimento altrimenti

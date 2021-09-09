@@ -299,6 +299,7 @@ int main (int argc, char ** argv){
                     else printWarning(NO_ARG);
                 }
                 else printWarning(CONN_CLOSED);
+                break;
             }
 
             // Unlock file
@@ -317,6 +318,7 @@ int main (int argc, char ** argv){
                     else printWarning(NO_ARG);
                 }
                 else printWarning(CONN_CLOSED);
+                break;
             }
 
 

@@ -83,9 +83,11 @@ fileNode * lastAddedFile=NULL;
 int evClose;
 int fdListen;
 
-// Macro per le operazioni standard di fine richiesta; la prima include l'invio di una risposta al client
+// Macro per le operazioni standard di fine richiesta; la seconda esclude l'invio di una risposta
+// END_NOLISTEN è per i casi in cui il rimettersi in ascolto per il client è già stato segnalato
 #define END_REQ(OP) logOperation(OP, currentRequest, res, reqArg);writeListenFd(currentRequest);sendAnswer(currentRequest, res);
 #define END_NOANSW(OP) logOperation(OP, currentRequest, res, reqArg);writeListenFd(currentRequest);
+#define END_NOLISTEN(OP) logOperation(OP, currentRequest, res, reqArg);sendAnswer(currentRequest, res);
 
 
 void errEx () {
@@ -505,7 +507,12 @@ void * manageRequest() {
                             // Se posso scrivere controllo di avere spazio disponibile; in caso procedo all'espulsione di file vittima
                             printf("Used bytes: %li/%li and fSize %li\n",usedBytes,capacity,fSize);
                             while (usedBytes+fSize > capacity) {
-                                expelFile(currentRequest,WR,fileName);
+                                if (expelFile(currentRequest,WR,fileName)==-1) {
+                                    END_NOLISTEN(WR)
+                                    res = -1;
+                                    break;
+                                }
+                                if (res==-1) break;
                             }
 
                             // Segnalo al client di poter inviare il contenuto del file
@@ -634,7 +641,7 @@ void * manageRequest() {
                 if (fileCount == storageDim) {
                     if (expelFile(currentRequest,PUC,reqArg)==-1) {
                         res = -1;
-                        END_REQ(PUC)
+                        END_NOLISTEN(PUC)
                     }
                 }
                 // Ricavo nome file

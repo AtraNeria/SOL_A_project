@@ -157,25 +157,27 @@ void startServer () {
     sigiq = 0;
     sighup = 0;
 
-    /*// Definisco la gestione segnali
+    // Definisco la gestione segnali
     //Per SIGINT e SIGQUIT
-    struct sigaction * immediate;
-    memset(immediate, 0, sizeof(immediate));
-    immediate->sa_handler = setIqFl;
-    //Per SIGHUP
-    struct sigaction * finishFirst;
-    memset(finishFirst, 0, sizeof(finishFirst));
-    finishFirst->sa_handler = setShFl;
-    // Ignoro SIGPIPE
-    struct sigaction * ignore;
-    memset(ignore, 0, sizeof(ignore));
-    ignore->sa_handler = SIG_IGN;
-    // Registro le azioni
-    sigaction(SIGINT,immediate,NULL);
-    sigaction(SIGQUIT,immediate,NULL);
-    sigaction(SIGHUP,finishFirst,NULL);
-    sigaction(SIGPIPE,ignore,NULL); */
+    struct sigaction immediate;
+    memset(&immediate, 0, sizeof(immediate));
+    immediate.sa_handler = setIqFl;
+    if (sigaction(SIGINT,&immediate,NULL)==-1) errEx();
+    if (sigaction(SIGQUIT,&immediate,NULL)==-1) errEx();
 
+    //Per SIGHUP
+    struct sigaction finishFirst;
+    memset(&finishFirst, 0, sizeof(sigaction));
+    finishFirst.sa_handler = setShFl;
+    if (sigaction(SIGHUP,&finishFirst,NULL)==-1) errEx();
+
+    // Ignoro SIGPIPE
+    struct sigaction ignore;
+    memset(&ignore, 0, sizeof(sigaction));
+    ignore.sa_handler = SIG_IGN;
+    if (sigaction(SIGPIPE,&ignore,NULL)==-1) errEx();
+
+    // Apro la socket del server
     int serverSFD;
     if ((serverSFD = socket(AF_UNIX, SOCK_STREAM,0))==-1)
         errEx();
@@ -315,19 +317,17 @@ void startServer () {
         }
 
     }
+
+    // Se arriva segnale SIGINT o SIGQUIT chiudo immediatamente il server
     if (sigiq) {
-        //for (int i=0;i<threadQuantity;i++) {
-        //    pthread_kill (workers[i],SIGKILL);
-        //}
+        connectionFDS[0].fd = -1;
         cleanup(workers,threadQuantity, socketsList);
         _exit(EXIT_SUCCESS);
     }
+    // Se arriva SIGHUP servo le richieste che ho al momento prima di chiudere il server
     if (sighup) {
         connectionFDS[0].fd = -1;
-        //while (requestsQueue!=NULL) wait();
-        //for (int i=0;i<threadQuantity;i++) {
-        //    pthread_kill (workers[i],SIGKILL);
-        //}
+        while (requestsQueue!=NULL) continue;
         cleanup(workers,threadQuantity, socketsList);
         _exit(EXIT_SUCCESS);
     }
@@ -383,10 +383,10 @@ fileNode * initStorage(FILE * f, char * fname, int fOwner){
 
 void * manageRequest() {
 
-    /*// Setto le sigmask per far gestire i segnali solo da thread master
-    sigset_t * sigmask;
-    if (sigfillset(sigmask)==-1) errEx();
-    if (pthread_sigmask (SIG_SETMASK, sigmask, NULL) != 0) errEx(); */
+    // Setto le sigmask per far gestire i segnali solo da thread master
+    sigset_t sigmask;
+    if (sigfillset(&sigmask)==-1) errEx();
+    if (pthread_sigmask (SIG_SETMASK, &sigmask, NULL) != 0) errEx();
 
     //fd associato alla richiesta attuale
     int currentRequest;

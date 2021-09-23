@@ -43,6 +43,11 @@ int sendHeader (int fd, char * pathname, ssize_t size);
 */
 int waitForAck (int fd);
 
+/* Controlla se client ha i permessi per accedere a file.
+    Restituisce 0 se li ha, -1 altrimenti
+*/
+int checkPrivilege (int client, fileNode * file);
+
 /* Espelle un file per permettere l'operazione op su file fName richiesta dal client fd.
     Il file vittima viene inviato al client.
     Restituisce 0 in caso successo, -1 altrimenti
@@ -1040,7 +1045,21 @@ int sendHeader (int fd, char * pathname, ssize_t size) {
     return res;
 }
 
+int checkPrivilege (int client, fileNode * file) {
+    if (file->owner == client || file->owner==0) return 0;
+    else return -1;
+}
+
 int expelFile (int fd, int op, char * fName) {
+    // Controllo se il client attuale ha i permessi per ricevere il file da espellere
+    if (!checkPrivilege(fd,storage)) {
+        if (sendAnswer(fd,WAIT)==-1 || waitForAck(fd)==-1) {
+            logOperation(op, fd, FAILURE, fName);
+            writeListenFd (fd);
+            return -1;
+        }
+        goto elim;
+    }
     
     // Se sono a capacità massima avverto il client dell'espulsione di un file e aspetto feedback
     if (sendAnswer(fd,EXPEL)==-1 || waitForAck(fd)==-1) {
@@ -1057,6 +1076,7 @@ int expelFile (int fd, int op, char * fName) {
     }
 
     // Elimino il file dallo storage
+    elim:
     usedBytes-= storage->fileSize;
     storage=popFile(storage);
     fileCount--;

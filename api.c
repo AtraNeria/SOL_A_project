@@ -142,6 +142,7 @@ int openFile (const char* pathname, int flags){
     memset (buffRead, 0, MAX_BUF_SIZE);
     void * toFree = buffRead;
     size_t nToWrite;
+    ssize_t res;
 
     if ( flags != 0) {
         switch (flags){
@@ -156,12 +157,17 @@ int openFile (const char* pathname, int flags){
                 strcpy (buffer, PUB_CREATE);
                 strcat (buffer,pathname);
 
-                if (writeAndRead(buffer, &buffRead, nToWrite-1, MAX_BUF_SIZE)==-1) FREE_RET;    // STUCK
+                if (writeAndRead(buffer, &buffRead, nToWrite-1, MAX_BUF_SIZE)==-1) FREE_RET;
+                res = getAnswer(&buffRead,MAX_BUF_SIZE,PUC);
 
                 // Se il server mi risponde con l'espulsione di un file
-                if (getAnswer(&buffRead,MAX_BUF_SIZE,PUC)==EXPEL) {
+                if (res==EXPEL) {
                     if (getExpelledFile() == -1) FREE_RET
                 }
+                // Se non ho i permessi per ricevere il file espulso
+                if (res==WAIT) {
+                    if (sendAnswer(clientSFD,SUCCESS)==-1) FREE_RET
+                }                     
                 break;
 
 
@@ -182,11 +188,16 @@ int openFile (const char* pathname, int flags){
                 strcpy (buffer, PRIV_CREATE);
                 strcat (buffer,pathname);
                 if (writeAndRead(buffer,&buffRead, nToWrite, MAX_BUF_SIZE)==-1) FREE_RET;
+                res = getAnswer(&buffRead,MAX_BUF_SIZE,PUC);
 
                 // Se il server mi risponde con l'espulsione di un file
-                if (getAnswer(&buffRead,MAX_BUF_SIZE,PUC)==EXPEL) {
+                if (res==EXPEL) {
                     if (getExpelledFile() == -1) FREE_RET
                 }
+                // Se non ho i permessi per ricevere il file espulso
+                if (res==WAIT) {
+                    if (sendAnswer(clientSFD,SUCCESS)==-1) FREE_RET
+                }                     
                 break;
 
             default:
@@ -511,11 +522,20 @@ int appendToFile (const char* pathname, void* buf, size_t size, const char* dirn
     toFree = buffRead;
 
     // Se il server deve espellere file li ricevo finchè non mi segnala di avere abbastanza spazio
-    while (res==EXPEL) {
+    while (res==EXPEL || res==WAIT) {
         // Leggo file espulso
-        if (getExpelledFile() == -1) {
-            free(toFree);
-            return -1;
+        if (res==EXPEL){
+            if (getExpelledFile() == -1) {
+                free(toFree);
+                return -1;
+            }
+        }
+        // Se il server mi chiede di aspettare perchè non ho i diritti per ricevere il file rispondo con un ok
+        else {
+            if (sendAnswer(clientSFD,SUCCESS)==-1) {
+                free(toFree);
+                return -1;
+            }
         }
 
         // Leggo risposta successiva

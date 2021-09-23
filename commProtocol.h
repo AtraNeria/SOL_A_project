@@ -46,6 +46,7 @@
 #define SUCCESS 0
 #define FAILURE -1
 #define EXPEL -2
+#define WAIT -3
 
 
 /* Controlla se i byte size di buffer sono terminati dai caratteri terminatori EOBUFF.

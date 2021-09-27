@@ -399,12 +399,12 @@ void navigateDir(char * dirName, int n, int j) {
     if (n==0) { 
         struct dirent * currFile = calloc (sizeof(struct dirent),1);
         struct dirent * ptr = currFile;
-        struct stat * dirStreamInfo = calloc(sizeof(struct stat),1);
         errno = 0;
         if ((currFile=readdir(dirToWrite))==NULL && errno!=0) errEx();
 
         while (currFile!=NULL) {
             // Copio nome
+            struct stat * dirStreamInfo = calloc(sizeof(struct stat),1);
             char currentName [strlen(currFile->d_name)+1];
             strcpy(currentName,currFile->d_name);
             
@@ -413,7 +413,6 @@ void navigateDir(char * dirName, int n, int j) {
             strcpy(fileName, dirName);
             strcat(fileName, "/");
             strcat(fileName,currentName);
-            printf ("Fullpath: %s\n",fileName);
             if (stat(fileName,dirStreamInfo)==-1) errEx();
 
             // if is not a dot file  
@@ -438,33 +437,46 @@ void navigateDir(char * dirName, int n, int j) {
 
     // Numero file specifico
     else { 
-        struct stat * dirStreamInfo = calloc(sizeof(struct stat),1);
         struct dirent * currFile = calloc (sizeof(struct dirent),1);
+        struct dirent * ptr = currFile;
         errno = 0;
         if ((currFile=readdir(dirToWrite))==NULL && errno!=0) errEx();
+
         while (j<=n && currFile!=NULL) {
+            // Copio nome
+            struct stat * dirStreamInfo = calloc(sizeof(struct stat),1);
+            char currentName [strlen(currFile->d_name)+1];
+            strcpy(currentName,currFile->d_name);
+
+            // Path intero
             char * fileName = calloc(2048, sizeof(char));
             strcpy(fileName, dirName);
             strcat(fileName, "/");
-            strcat(fileName,currFile->d_name);
+            strcat(fileName,currentName);
             printf("%s\n",fileName);
             if (stat(fileName,dirStreamInfo)==-1) errEx();
 
-           if(fileName[0]!='.'){
+            // Se non è un dotFile
+            if(strcmp(currentName,".")!=0 && strcmp(currentName,"..")!=0){
+                // Se è una sottodirectory
                 if (S_ISDIR(dirStreamInfo->st_mode)) {
                     char * subDir = calloc (strlen(dirName)+strlen(currFile->d_name)+strlen("/")+1,sizeof(char));
                     sprintf(subDir,"%s/%s",dirName,currFile->d_name);
                     navigateDir(subDir, 0, j);
                     free (subDir);
                 }
-                else if((writeFile(fileName,expelledFiles)) == -1) errEx();
+                // Se è un file
+                else {
+                    if((writeFile(fileName,expelledFiles)) == -1) errEx();
+                    else j++;
+                    }
             }
+            memset (ptr,0,sizeof(struct dirent));
             currFile=readdir(dirToWrite);
-            j++;
-            free (currFile);
             free (dirStreamInfo);
             free(fileName);
         }
+        free (ptr);
     }
     closedir(dirToWrite);
 }

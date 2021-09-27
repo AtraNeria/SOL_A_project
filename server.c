@@ -194,8 +194,11 @@ void startServer () {
     address.sun_family = AF_UNIX;
     strcpy(address.sun_path, "./server");
     
-    if (bind(serverSFD, (struct sockaddr *)&address, sizeof(address))==-1)   //Permission denied, need sudo
+    if (bind(serverSFD, (struct sockaddr *)&address, sizeof(address))==-1){   //Permission denied, need sudo
+        currSock = NULL;
+        socketsList = popNode (socketsList);
         errEx();
+    }
     
     pthread_t * workers = calloc(threadQuantity,sizeof(pthread_t));
 
@@ -364,7 +367,7 @@ int createWorkers (pthread_t  workers[]) {
 
     int error_num;
     for (int i=0; i<threadQuantity; i++) {
-        if( (error_num = pthread_create(&workers[i], NULL, manageRequest, NULL))!=0) {   //will be revised
+        if( (error_num = pthread_create(&workers[i], NULL, manageRequest, NULL))!=0) {
             errno = error_num;
             return i;
         }
@@ -390,18 +393,21 @@ void * manageRequest() {
 
     // Setto le sigmask per far gestire i segnali solo da thread master
     sigset_t sigmask;
-    if (sigfillset(&sigmask)==-1) errEx();
-    if (pthread_sigmask (SIG_SETMASK, &sigmask, NULL) != 0) errEx();
+    if (sigfillset(&sigmask)==-1) pthread_exit(NULL);
+    if (pthread_sigmask (SIG_SETMASK, &sigmask, NULL) != 0) pthread_exit(NULL);
 
     //fd associato alla richiesta attuale
     int currentRequest;
 
-    //finchè accetto nuove richieste
-    while(TRUE) {
+    //Finchè accetto nuove richieste
+    while(TRUE && !sigiq) {
 
         pthread_mutex_lock(&mutex);
-        // Prelevo fd da servive dalla queue
-        while (requestsQueue==NULL ) pthread_cond_wait(&newReq,&mutex);
+        // Prelevo fd da servire dalla queue
+        while (requestsQueue==NULL ) {
+            if (sighup) pthread_exit(NULL);
+            pthread_cond_wait(&newReq,&mutex);
+        }
         currentRequest = requestsQueue->descriptor;
         requestsQueue = popNode(requestsQueue);
         if (requestsQueue==NULL) lastRequest=NULL;
@@ -414,7 +420,7 @@ void * manageRequest() {
         size_t totBytesR = 0;
         while (tr>0 && reqRes!=0) {
             if (totBytesR!=0 && bufferCheck(buffer)==1) break;
-            if ((reqRes=read(currentRequest, buffer+totBytesR, tr))==-1) errEx();
+            if ((reqRes=read(currentRequest, buffer+totBytesR, tr))==-1) pthread_exit(NULL);
             totBytesR+=reqRes;
             tr-=reqRes;
         }
@@ -883,6 +889,7 @@ void * manageRequest() {
     free (toFree);
     free (tk);
     }
+    if (sigiq) pthread_exit(NULL);
 }
 
 int sendFile (int fd, fileNode * f, int op) {

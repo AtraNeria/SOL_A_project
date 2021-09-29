@@ -91,10 +91,6 @@ int openConnection (const char* sockname, int msec, const struct timespec abstim
     while ( (result=connect(clientSFD, (struct sockaddr*)&sa, sizeof(sa)))!=0 && total_t < abstime.tv_nsec ){
 
         timespec_get(&start, TIME_UTC);
-        if (errno != 0 || errno != ENOENT) {
-                return result;
-        }
-
         sleep(msec * 0.001);
         errno=0;
         timespec_get(&end, TIME_UTC);
@@ -188,7 +184,7 @@ int openFile (const char* pathname, int flags){
                 strcpy (buffer, PRIV_CREATE);
                 strcat (buffer,pathname);
                 if (writeAndRead(buffer,&buffRead, nToWrite, MAX_BUF_SIZE)==-1) FREE_RET;
-                res = getAnswer(&buffRead,MAX_BUF_SIZE,PUC);
+                res = getAnswer(&buffRead,MAX_BUF_SIZE,PRC);
 
                 // Se il server mi risponde con l'espulsione di un file
                 if (res==EXPEL) {
@@ -599,6 +595,8 @@ int lockFile(const char* pathname){
     }
     else {
         int answer = getAnswer(&buffRead,MAX_BUF_SIZE,LCK);
+        // Se il file che sto provando a lockare non esiste lo creo con flag O_LOCK
+        if (answer == ENOENT) answer = openFile(pathname,O_CREATE | O_LOCK);
         free (toFreeWrite);
         free (toFree);
         PROP(LCK,pathname,answer,0)

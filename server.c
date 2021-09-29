@@ -64,8 +64,8 @@ void setIqFl ();
 void setShFl ();
 
 // Flags settate dalla gestione dei segnali
-int sigiq;
-int sighup;
+volatile sig_atomic_t sigiq;
+volatile sig_atomic_t sighup;
 
 int threadQuantity;
 int storageDim;
@@ -113,7 +113,7 @@ void init (int index, char * string) {
         break;
     
     case 2:
-        capacity=atol(string);
+        capacity=atol(string)*1000000;
         break;
 
     case 3:
@@ -159,14 +159,24 @@ void readConfig () {
 
 void startServer () {
 
+    // Maschero i segnali per installare i gestori
+    sigset_t sigmask;
+    if (sigfillset(&sigmask)==-1) errEx();
+    if (pthread_sigmask (SIG_SETMASK, &sigmask, NULL)!= 0) errEx();
+
     sigiq = 0;
     sighup = 0;
-
     // Definisco la gestione segnali
     //Per SIGINT e SIGQUIT
     struct sigaction immediate;
-    memset(&immediate, 0, sizeof(immediate));
+    memset(&immediate, 0, sizeof(struct sigaction));
     immediate.sa_handler = setIqFl;
+    immediate.sa_flags = SA_RESTART;
+    //Specifico segnali da ingnorare durante l'installazione degli handler
+    sigemptyset(&immediate.sa_mask);
+    sigaddset(&immediate.sa_mask,SIGINT);
+    sigaddset(&immediate.sa_mask, SIGQUIT);
+    //Installo gli handler
     if (sigaction(SIGINT,&immediate,NULL)==-1) errEx();
     if (sigaction(SIGQUIT,&immediate,NULL)==-1) errEx();
 
@@ -174,13 +184,23 @@ void startServer () {
     struct sigaction finishFirst;
     memset(&finishFirst, 0, sizeof(sigaction));
     finishFirst.sa_handler = setShFl;
+    finishFirst.sa_flags = SA_RESTART;
+    sigemptyset(&finishFirst.sa_mask);
+    sigaddset(&finishFirst.sa_mask,SIGHUP);
     if (sigaction(SIGHUP,&finishFirst,NULL)==-1) errEx();
 
     // Ignoro SIGPIPE
     struct sigaction ignore;
     memset(&ignore, 0, sizeof(sigaction));
     ignore.sa_handler = SIG_IGN;
+    ignore.sa_flags = SA_RESTART;
+    sigemptyset(&ignore.sa_mask);
+    sigaddset(&finishFirst.sa_mask,SIGPIPE);
     if (sigaction(SIGPIPE,&ignore,NULL)==-1) errEx();
+
+    // Tolgo la maschera dei segnali
+    if (sigemptyset(&sigmask)==-1) errEx();
+    if (pthread_sigmask (SIG_SETMASK, &sigmask, NULL)!= 0) errEx();
 
     // Apro la socket del server
     int serverSFD;
@@ -244,7 +264,7 @@ void startServer () {
 
 
 
-    while(!sigiq && !sighup) {
+    while(!sigiq) {
 
         //Controllo se devo rimettermi in ascolto di fd
         if (connectionFDS[2].revents == POLLIN) {
@@ -271,10 +291,10 @@ void startServer () {
             }
             deleteNode(*toClose,&socketsList);
             close(*toClose);
-            free(eventB);
 
             pthread_mutex_lock(&mutex);
             logOperation(CC, *toClose, 0, NULL);
+            free(eventB);
             pthread_mutex_unlock(&mutex);
 
         }
@@ -288,7 +308,7 @@ void startServer () {
         }
 
         //if client richiede connect
-        if (connectionFDS[0].revents == POLLIN) {
+        if (connectionFDS[0].revents == POLLIN && !sighup) {
             int j = 3;
             while(connectionFDS[j].fd!=-1 && j<maxFd) j++; 
             //controllo se ho spazio per gestire più client
@@ -306,7 +326,9 @@ void startServer () {
         }
 
         //Se un client già connesso ha una richiesta
+        int closedConn=3;
         for (int i=3;i<maxFd;i++){
+            if (sighup && connectionFDS[i].fd==-1) closedConn++;
             if (connectionFDS[i].revents==POLLIN && connectionFDS[i].fd!=-1) {
                 pthread_mutex_lock(&mutex);
                 if (requestsQueue == NULL) {
@@ -323,38 +345,37 @@ void startServer () {
                 pthread_mutex_unlock(&mutex);
             }
         }
-
+        if (sighup && closedConn==maxFd) break;
     }
 
     // Se arriva segnale SIGINT o SIGQUIT chiudo immediatamente il server
     if (sigiq) {
         connectionFDS[0].fd = -1;
         cleanup(workers,threadQuantity, socketsList);
+        free (connectionFDS);
         _exit(EXIT_SUCCESS);
     }
+
     // Se arriva SIGHUP servo le richieste che ho al momento prima di chiudere il server
     if (sighup) {
         connectionFDS[0].fd = -1;
-        while (requestsQueue!=NULL) continue;
         cleanup(workers,threadQuantity, socketsList);
+        free (connectionFDS);
         _exit(EXIT_SUCCESS);
     }
-    free (connectionFDS);
 }
 
 void cleanup(pthread_t workers[], int index, node * socket_list) {
     for (int i=0; i<index; i++) {       //join dei thread aperti
+        pthread_cancel(workers[i]);
         pthread_join(workers[i], NULL);
     }
     free(workers);
 
     node * toFree;
     while (socket_list != NULL) {       //chiusura sockets
-        if (close(socket_list->descriptor)!=0)
-            errEx();
-        toFree = socket_list;
-        socket_list = socket_list->next;
-        free(toFree);
+        if (close(socket_list->descriptor)!=0) errEx();
+        socket_list = popNode(socket_list);
     }
 
     while (storage!=NULL) {         //chiusura e free file rimasti
@@ -395,17 +416,17 @@ void * manageRequest() {
     sigset_t sigmask;
     if (sigfillset(&sigmask)==-1) pthread_exit(NULL);
     if (pthread_sigmask (SIG_SETMASK, &sigmask, NULL) != 0) pthread_exit(NULL);
+    if (pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS,NULL)!=0) pthread_exit(NULL);
 
     //fd associato alla richiesta attuale
     int currentRequest;
 
     //Finchè accetto nuove richieste
-    while(TRUE && !sigiq) {
+    while(TRUE) {
 
         pthread_mutex_lock(&mutex);
         // Prelevo fd da servire dalla queue
         while (requestsQueue==NULL ) {
-            if (sighup) pthread_exit(NULL);
             pthread_cond_wait(&newReq,&mutex);
         }
         currentRequest = requestsQueue->descriptor;
@@ -443,6 +464,8 @@ void * manageRequest() {
         printf("%d %s\n",code,request); //TEST
         char * reqArg;
 
+        // Disabilito cancellazione mentre servo richiesta per non lasciare garbage nell'ambiente
+        if (pthread_setcancelstate(PTHREAD_CANCEL_DISABLE,NULL)!=0) pthread_exit(NULL);
         switch (code) {
 
             // Richiesta di lettura //
@@ -765,37 +788,47 @@ void * manageRequest() {
             // Creazione di un file locked //
             case PRC: {
                 pthread_mutex_lock(&mutex);
+                printf ("Capacity: %d/%d\n",fileCount,storageDim);
                 int res = 0;
-                if (fileCount >= capacity) {
-                    while (fileCount>=capacity) {
-                        storage = popFile(storage);
-                        fileCount --;
-                        // TO DO: send expelled file and log
+
+                // Se sono a capacità massima avverto il client dell'espulsione di un file e aspetto feedback
+                if (fileCount == storageDim) {
+                    if (expelFile(currentRequest,PRC,reqArg)==-1) {
+                        res = -1;
+                        END_NOLISTEN(PRC)
                     }
                 }
-
+                // Ricavo nome file
                 reqArg = strtok_r (NULL, EOBUFF, &ptr);
-                if (reqArg == NULL) res = -1;
+                if (reqArg == NULL) {
+                    res = -1;
+                    END_REQ(PRC)
+                }
 
+                // Se è il primo file nello storage lo inizializzo
                 else {
                     if (storage == NULL) {
                         storage = initStorage (NULL, reqArg, currentRequest);
                         fileCount++;
+                        END_REQ(PRC)
                     }
                     else {
+                        // Se non è il primo file lo aggiungo
                         fileNode * toCr;
                         if (searchFile(reqArg,storage,&toCr) == -1) {
                             lastAddedFile->next = newFile (NULL, 0, reqArg, currentRequest, &lastAddedFile);
                             lastAddedFile = lastAddedFile->next;
                             fileCount++;
                             printf("Last file: %s\n",lastAddedFile->fileName);
+                            END_REQ(PRC)
                         }
-                        else res = -1;
-                        
+                        else {
+                            res = -1;
+                            END_REQ(PRC);
+                        }
                     }
+                    pthread_mutex_unlock(&mutex);
                 }
-                END_REQ(PRC)
-                pthread_mutex_unlock(&mutex);
                 break;
             }
 
@@ -838,8 +871,9 @@ void * manageRequest() {
                     strcpy(pathname,reqArg);
 
                     // Se il file non esiste l'operazione fallisce
-                    int res = searchFile (pathname, storage, &fToLc);
-                    if (res!=-1){
+                    int res = 0;
+                    if (searchFile (pathname, storage, &fToLc)==-1) res=ENOENT;
+                    if (res!=ENOENT){
                         
                         // Se non è locked o è stato già acquisito dal processo l'operazione ha successo
                         if (fToLc->owner == currentRequest || fToLc->owner==0) { 
@@ -888,8 +922,10 @@ void * manageRequest() {
     
     free (toFree);
     free (tk);
+    //Riabilito cancellazione thread
+    if (pthread_setcancelstate(PTHREAD_CANCEL_ENABLE,NULL)!=0) pthread_exit(NULL);
     }
-    if (sigiq) pthread_exit(NULL);
+    return NULL;
 }
 
 int sendFile (int fd, fileNode * f, int op) {
@@ -922,7 +958,7 @@ int sendFile (int fd, fileNode * f, int op) {
         writeSize -= nWritten;
         totBytesWritten += nWritten;
     }
-    write(fd, EOBUFF, EOB_SIZE);
+    if(op!=RD) write(fd, EOBUFF, EOB_SIZE);
     free (toFree);
     return 0; 
 }

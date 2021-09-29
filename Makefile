@@ -1,6 +1,6 @@
 CC = gcc
 FLAGS = -Wall -g
-OBJECTS = api.o client.o server.o main.o list.o protocol.o
+OBJECTS = api.o client.o server.o main.o list.o protocol.o commProtocol.o
 TARGETS = main.out client.out
 
 .PHONY: all clean cleanall test1 cleantest
@@ -52,9 +52,10 @@ cleanall:
 
 test1:
 	make all
-	mv ./main.out ./client.out ./Test1
+	mv main.out client.out Test1
+	cd ./Test1; valgrind --leak-check=full ./main.out & ./test1.sh
 
-test2:
+test2:test1
 	make all
 	mv ./main.out ./client.out ./Test2
 

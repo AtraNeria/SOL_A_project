@@ -17,7 +17,8 @@
 #define O_LOCK 10
 
 #define SET_LO if (lastOperation==1) lastOperation=0
-#define FREE_RET {free(toFreeWrite); free(toFree); return -1;}
+#define FREE_RET \
+    {free(toFreeWrite); free(toFree); return -1;}
 #define PROP(op,file,res,byte) if (pOpt_met) {printOpRes(op,file,res,byte);}
 
 
@@ -423,7 +424,6 @@ int writeFile (const char* pathname, const char* dirname){
     // Apro file in locale 
     FILE * fToWrite; 
     if ((fToWrite = fopen(pathname, "r+") )== NULL) {
-        printf ("Open failure: %s\n",pathname);     //TEST
         PROP(WR,pathname,-1,0)
         return -1;
     }
@@ -701,7 +701,7 @@ ssize_t writeAndRead (void * bufferToWrite, void ** bufferToRead, size_t bufferS
     size_t nToWrite = bufferSize;
     ssize_t nWritten = 1;
     size_t totBytesWritten = 0;
-    printf("%s\n",(char*)bufferToWrite);
+    //printf("%s\n",(char*)bufferToWrite);  //TEST
     while ( nToWrite > 0 && nWritten!=0) {
         if ((nWritten = write(clientSFD, bufferToWrite, nToWrite))==-1) return -1;
             bufferToWrite+=nWritten;
@@ -819,7 +819,6 @@ int getHeader_File (void ** content, void ** pathname, size_t * size, int op){
         ssize_t nRead = 1;
         size_t totBytes = 0;
         while (nToRd>0 && nRead!=0) {
-            printf("To read :%d\n",nToRd);
             if (totBytes!=0 && bufferCheck(buffRead)!=0) break;
             if ((nRead=read(clientSFD,buffRead+totBytes,nToRd))==-1) {
                 free(toFree);
@@ -828,7 +827,7 @@ int getHeader_File (void ** content, void ** pathname, size_t * size, int op){
             nToRd-=nRead;
             totBytes +=nRead;
         }
-        printf("Header letto: %s\n",(char *)buffRead);
+        //printf("Header letto: %s\n",(char *)buffRead);  //TEST
         char toTok [MAX_BUF_SIZE];
         strcpy (toTok,(char*)buffRead);
 

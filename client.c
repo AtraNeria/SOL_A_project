@@ -42,7 +42,7 @@ void cleanup();
 
 /* Naviga la cartella data fino a n file in modo ricorsivo, 
 tenendo il conto dei file già visitati in j*/
-void navigateDir(char * dirName, int n, int j);
+int navigateDir(char * dirName, int n, int j);
 
 
 int msec = 0;
@@ -118,7 +118,7 @@ int main (int argc, char ** argv){
                         char * numFiles = strtok(NULL, ",");
                         int n=0;
                         if (numFiles!=NULL) n=atoi(numFiles);
-                        navigateDir(dirName,n,1);                        
+                        if (navigateDir(dirName,n,1)==-1) break;                        
                         free(wArg);
                     }
 
@@ -141,11 +141,13 @@ int main (int argc, char ** argv){
 
                         if (writeFile(currArg,expelledFiles)==-1) {
                             free(args);
-                            errEx();}
+                            break;
+                        }
                         while ((currArg = strtok_r(NULL,", ", &saveptr))!=NULL){
                             if (writeFile(currArg,expelledFiles)==-1) {
                                 free(args);
-                                errEx();}
+                                break;
+                            }
                         }
                         free(args);
                     }
@@ -170,7 +172,7 @@ int main (int argc, char ** argv){
 
                         if (readFile(fToRead, &buffer, &bufferSize)==-1) {
                             free(rArgs);
-                            errEx();
+                            break;
                         }
                         free(buffer);
                         buffer = NULL;
@@ -181,7 +183,7 @@ int main (int argc, char ** argv){
                             size_t s=0;
                             if (readFile(fToRead, &buff, &s)==-1) {
                                 free (rArgs);
-                                errEx();
+                                break;
                             }
                             free(buff);
                         }
@@ -201,9 +203,9 @@ int main (int argc, char ** argv){
                     if (dirReadFiles==NULL) printWarning (NO_DIR);
                     else if (optarg != NULL) {
                         int n = atoi(optarg);
-                        if (readNFiles(n, dirReadFiles)==-1) errEx();
+                        if (readNFiles(n, dirReadFiles)==-1) break;
                     }
-                    else if (readNFiles(0, dirReadFiles)==-1) errEx();
+                    else if (readNFiles(0, dirReadFiles)==-1) break;
                 }
                 else printWarning(CONN_CLOSED);
                 break;
@@ -268,11 +270,13 @@ int main (int argc, char ** argv){
                         char * currArg = strtok_r(args, ",", &saveptr);
                         if (removeFile(currArg)==-1) {
                             free (args);
-                            errEx();}
+                            break;
+                        }
                         while ((currArg = strtok_r(NULL,", ", &saveptr))!=NULL) {
                             if (removeFile(currArg)==-1) {
                                 free(args);
-                                errEx();}
+                                break;
+                            }
                         }
                         free(args);
                     }
@@ -292,7 +296,7 @@ int main (int argc, char ** argv){
                         strcpy(args, optarg);
                         char * currArg = strtok_r(args, ",", &saveptr);
                         while (currArg!=NULL) {
-                            if (lockFile(currArg)==-1) errEx();
+                            if (lockFile(currArg)==-1) break;
                             currArg = strtok_r(NULL, ",", &saveptr);
                         }
                     }
@@ -311,7 +315,7 @@ int main (int argc, char ** argv){
                         strcpy(args, optarg);
                         char * currArg = strtok_r(args, ",", &saveptr);
                         while (currArg!=NULL) {
-                            if (unlockFile(currArg)==-1) errEx();
+                            if (unlockFile(currArg)==-1) break;
                             currArg = strtok_r(NULL, ",", &saveptr);
                         }
                     }
@@ -390,17 +394,20 @@ void errEx () {
     exit(EXIT_FAILURE);
 }
 
-void navigateDir(char * dirName, int n, int j) {
+int navigateDir(char * dirName, int n, int j) {
     // Apro la cartella ./dirName
     DIR * dirToWrite;
-    if ((dirToWrite = opendir(dirName))==NULL) errEx();
+    if ((dirToWrite = opendir(dirName))==NULL) return -1;
 
     // Numero di file da scrivere non specificato
     if (n==0) { 
         struct dirent * currFile = calloc (sizeof(struct dirent),1);
         struct dirent * ptr = currFile;
         errno = 0;
-        if ((currFile=readdir(dirToWrite))==NULL && errno!=0) errEx();
+        if ((currFile=readdir(dirToWrite))==NULL && errno!=0) {
+            free(ptr);
+            return -1;
+        }
 
         while (currFile!=NULL) {
             // Copio nome
@@ -413,7 +420,12 @@ void navigateDir(char * dirName, int n, int j) {
             strcpy(fileName, dirName);
             strcat(fileName, "/");
             strcat(fileName,currentName);
-            if (stat(fileName,dirStreamInfo)==-1) errEx();
+            if (stat(fileName,dirStreamInfo)==-1) {
+                free(ptr);
+                free(dirStreamInfo);
+                free(fileName);
+                return -1;
+            }
 
             // if is not a dot file  
             if(strcmp(currentName,".")!=0 && strcmp(currentName,"..")!=0){
@@ -421,18 +433,29 @@ void navigateDir(char * dirName, int n, int j) {
                 if (S_ISDIR(dirStreamInfo->st_mode)) {
                     char * subDir = calloc (strlen(dirName)+strlen(currentName)+strlen("/")+1,sizeof(char));
                     sprintf(subDir,"%s/%s",dirName,currentName);
-                    navigateDir(subDir, 0, j);
+                    if (navigateDir(subDir, 0, j)==-1) {
+                        free(ptr);
+                        free(dirStreamInfo);
+                        free(fileName);
+                        free(subDir);
+                        return -1;
+                    }
                     free (subDir);
                 }
                 // Se non è una cartella scrivo il file
-                else if((writeFile(fileName,expelledFiles)) == -1) errEx();
+                else if((writeFile(fileName,expelledFiles)) == -1) {
+                    free(ptr);
+                    free(dirStreamInfo);
+                    free(fileName);
+                    return -1;
+                }
             }
             memset (ptr,0,sizeof(struct dirent));
             currFile = readdir(dirToWrite);
             free (dirStreamInfo);
             free(fileName);
         }
-        free (currFile);
+        free (ptr);
     }
 
     // Numero file specifico
@@ -440,7 +463,10 @@ void navigateDir(char * dirName, int n, int j) {
         struct dirent * currFile = calloc (sizeof(struct dirent),1);
         struct dirent * ptr = currFile;
         errno = 0;
-        if ((currFile=readdir(dirToWrite))==NULL && errno!=0) errEx();
+        if ((currFile=readdir(dirToWrite))==NULL && errno!=0) {
+            free(ptr);
+            return -1;
+        }
 
         while (j<=n && currFile!=NULL) {
             // Copio nome
@@ -454,7 +480,12 @@ void navigateDir(char * dirName, int n, int j) {
             strcat(fileName, "/");
             strcat(fileName,currentName);
             printf("%s\n",fileName);
-            if (stat(fileName,dirStreamInfo)==-1) errEx();
+            if (stat(fileName,dirStreamInfo)==-1) {
+                free(ptr);
+                free(dirStreamInfo);
+                free(fileName);
+                return -1;
+            }
 
             // Se non è un dotFile
             if(strcmp(currentName,".")!=0 && strcmp(currentName,"..")!=0){
@@ -462,14 +493,25 @@ void navigateDir(char * dirName, int n, int j) {
                 if (S_ISDIR(dirStreamInfo->st_mode)) {
                     char * subDir = calloc (strlen(dirName)+strlen(currFile->d_name)+strlen("/")+1,sizeof(char));
                     sprintf(subDir,"%s/%s",dirName,currFile->d_name);
-                    navigateDir(subDir, 0, j);
+                    if (navigateDir(subDir, 0, j)==-1) {
+                        free(ptr);
+                        free(dirStreamInfo);
+                        free(fileName);
+                        free(subDir);
+                        return -1;
+                    }
                     free (subDir);
                 }
                 // Se è un file
                 else {
-                    if((writeFile(fileName,expelledFiles)) == -1) errEx();
-                    else j++;
+                    if((writeFile(fileName,expelledFiles)) == -1) {
+                        free(ptr);
+                        free(dirStreamInfo);
+                        free(fileName);
+                        return -1;
                     }
+                    else j++;
+                }
             }
             memset (ptr,0,sizeof(struct dirent));
             currFile=readdir(dirToWrite);
@@ -479,6 +521,7 @@ void navigateDir(char * dirName, int n, int j) {
         free (ptr);
     }
     closedir(dirToWrite);
+    return 0;
 }
 
 void cleanup(){

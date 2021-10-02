@@ -48,11 +48,11 @@ int waitForAck (int fd);
 */
 int checkPrivilege (int client, fileNode * file);
 
-/* Espelle un file per permettere l'operazione op su file fName richiesta dal client fd.
-    Il file vittima viene inviato al client.
+/* Espelle il file vittima fName.
+    file viene inviato al client fd che ha causato l'espulsione del file, in caso questo abbia i permessi per riceverlo.
     Restituisce 0 in caso successo, -1 altrimenti
 */
-int expelFile (int fd, int op, char * fName);
+int expelFile (int fd, fileNode * file);
 
 /* Segnala sull'eventfd fdListen fd
 */
@@ -286,6 +286,7 @@ void startServer () {
             memset (eventB, 0, 8);
             read (evClose, eventB, 8);
             int * toClose = eventB;
+            printf("CLOSE SOCKET %d\n",*toClose);
             for (int i=3; i<maxFd; i++) {       // Voglio chiudere 5, trova solo 3 ???
                 if (connectionFDS[i].fd == *toClose) connectionFDS[i].fd = -1;
             }
@@ -372,7 +373,6 @@ void cleanup(pthread_t workers[], int index, node * socket_list) {
     }
     free(workers);
 
-    node * toFree;
     while (socket_list != NULL) {       //chiusura sockets
         if (close(socket_list->descriptor)!=0) errEx();
         socket_list = popNode(socket_list);
@@ -539,9 +539,9 @@ void * manageRequest() {
                            
                         else {
                             // Se posso scrivere controllo di avere spazio disponibile; in caso procedo all'espulsione di file vittima
-                            printf("Used bytes: %li/%li and fSize %li\n",usedBytes,capacity,fSize);
+                            //printf("Used bytes: %li/%li and fSize %li\n",usedBytes,capacity,fSize); //TEST
                             while (usedBytes+fSize > capacity) {
-                                if (expelFile(currentRequest,WR,fileName)==-1) {
+                                if (expelFile(currentRequest,storage)==-1) {
                                     END_NOLISTEN(WR)
                                     res = -1;
                                     break;
@@ -597,6 +597,7 @@ void * manageRequest() {
                         deleteFile(fToWr,&storage,&lastAddedFile);
                         fileCount--;
                     }
+                    reqArg = fileName;
                 }
                 END_REQ(WR)
                 pthread_mutex_unlock(&mutex);
@@ -631,29 +632,25 @@ void * manageRequest() {
                 reqArg = strtok_r (NULL, EOBUFF, &ptr);
                 if (reqArg == NULL) {
                     res = -1;
-                    END_REQ(RM)
                 }
 
                 else {
                     fileNode * fToRm;
-                    int res;
-                    if ((res=searchFile(reqArg, storage, &fToRm))<=0) {
+                    if ((res=searchFile(reqArg, storage, &fToRm))==0) {
                         // Se il file non è in stato locked o locked dal processo richiedente lo posso eliminare
-                        if(res==0 || res==currentRequest) {
+                        if(fToRm->owner==0 || fToRm->owner==currentRequest) {
                             usedBytes-= fToRm->fileSize;
                             deleteFile (fToRm, &storage, &lastAddedFile);
                             fileCount--;
                         }
-                        // Se il file non esiste l'operazione ha automaticamente successo
-                        END_REQ(RM)
+                        // Se il file è locked da un altro processo l'operazione fallisce
+                        else res = -1;
                     }
-                    // Se il file è locked da un altro processo l'operazione fallisce
-                    else {
-                        res = -1;
-                        END_REQ(RM)
-                    }
+                    // Se il file non esiste l'operazione ha automaticamente successo
+                    else res = 0;
                 }
-                pthread_mutex_lock(&mutex);
+                END_REQ(RM)
+                pthread_mutex_unlock(&mutex);
                 break;
             }
 
@@ -673,7 +670,7 @@ void * manageRequest() {
 
                 // Se sono a capacità massima avverto il client dell'espulsione di un file e aspetto feedback
                 if (fileCount == storageDim) {
-                    if (expelFile(currentRequest,PUC,reqArg)==-1) {
+                    if (expelFile(currentRequest,storage)==-1) {
                         res = -1;
                         END_NOLISTEN(PUC)
                     }
@@ -719,7 +716,6 @@ void * manageRequest() {
 
                 pthread_mutex_lock(&mutex);
                 fileNode * currentFile = storage;
-                char msg [MAX_NAME_LEN];
                 int res = 0;
 
                 // Invio al client il numero di file disponibili che invierò
@@ -793,7 +789,7 @@ void * manageRequest() {
 
                 // Se sono a capacità massima avverto il client dell'espulsione di un file e aspetto feedback
                 if (fileCount == storageDim) {
-                    if (expelFile(currentRequest,PRC,reqArg)==-1) {
+                    if (expelFile(currentRequest,storage)==-1) {
                         res = -1;
                         END_NOLISTEN(PRC)
                     }
@@ -920,10 +916,10 @@ void * manageRequest() {
                 break;
         }
     
-    free (toFree);
-    free (tk);
-    //Riabilito cancellazione thread
-    if (pthread_setcancelstate(PTHREAD_CANCEL_ENABLE,NULL)!=0) pthread_exit(NULL);
+        free (toFree);
+        free (tk);
+        //Riabilito cancellazione thread
+        if (pthread_setcancelstate(PTHREAD_CANCEL_ENABLE,NULL)!=0) pthread_exit(NULL);
     }
     return NULL;
 }
@@ -944,7 +940,7 @@ int sendFile (int fd, fileNode * f, int op) {
         return -1;
     }
     // Torno alla fine del file per prepararlo ad eventuali altre operazioni
-    printf ("SEND %li of: %s\n",r,(char*)buff);   //TEST
+    //printf ("SEND %li of: %s\n",r,(char*)buff);   //TEST
     fseek (f->fPointer,0,SEEK_END);
 
     // Invio al client
@@ -1093,34 +1089,38 @@ int checkPrivilege (int client, fileNode * file) {
     else return -1;
 }
 
-int expelFile (int fd, int op, char * fName) {
+int expelFile (int fd, fileNode * file) {
+
     // Controllo se il client attuale ha i permessi per ricevere il file da espellere
     if (!checkPrivilege(fd,storage)) {
+        // Se fallisco a comunicare al client di attendere l'eliminazione
         if (sendAnswer(fd,WAIT)==-1 || waitForAck(fd)==-1) {
-            logOperation(op, fd, FAILURE, fName);
+            logOperation(EXF, fd, FAILURE, file->fileName);
             writeListenFd (fd);
             return -1;
         }
+        // Se non ha i permessi e comunico elimino semplicemente il file
         goto elim;
     }
     
     // Se sono a capacità massima avverto il client dell'espulsione di un file e aspetto feedback
     if (sendAnswer(fd,EXPEL)==-1 || waitForAck(fd)==-1) {
-        logOperation(op, fd, FAILURE, fName);
+        logOperation(EXF, fd, FAILURE, file->fileName);
         writeListenFd (fd);
         return -1;
     }
 
     // Invio nome e taglia del file da espellere e a seguire il contenuto
-    if (sendHeader(fd,storage->fileName,storage->fileSize) == -1 || sendFile(fd,storage,op)==-1) {
-        logOperation(op, fd, FAILURE, fName);
+    if (sendHeader(fd,file->fileName,file->fileSize) == -1 || sendFile(fd,storage,EXF)==-1) {
+        logOperation(EXF, fd, FAILURE, file->fileName);
         writeListenFd (fd);
         return -1;
     }
 
     // Elimino il file dallo storage
     elim:
-    usedBytes-= storage->fileSize;
+    logOperation(EXF,fd,SUCCESS,file->fileName);
+    usedBytes-= file->fileSize;
     storage=popFile(storage);
     fileCount--;
     return 0;

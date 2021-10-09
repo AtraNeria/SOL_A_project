@@ -207,14 +207,14 @@ void startServer () {
     if ((serverSFD = socket(AF_UNIX, SOCK_STREAM,0))==-1)
         errEx();
 
-    node * socketsList = addNode(serverSFD);
+    node * socketsList = addNode(serverSFD);    //TO-DO FREE
     node * currSock = socketsList;
 
     struct sockaddr_un address;
     address.sun_family = AF_UNIX;
     strcpy(address.sun_path, "./server");
     
-    if (bind(serverSFD, (struct sockaddr *)&address, sizeof(address))==-1){   //Permission denied, need sudo
+    if (bind(serverSFD, (struct sockaddr *)&address, sizeof(address))==-1){
         currSock = NULL;
         socketsList = popNode (socketsList);
         errEx();
@@ -235,29 +235,22 @@ void startServer () {
         errEx();
     }
 
-    // Creo un fd evento per monitorare eventuali comunicazioni da chiudere
-    evClose = eventfd(0,0);
-    socketsList = addNode(evClose);
-    currSock = socketsList;
     // Fd evento per reiniziare a monitorare client dopo la gestione di una loro richiesta
     fdListen = eventfd(0,0);
     currSock->next = addNode(fdListen);
     currSock=currSock->next;
     // Client + server + eventFD
-    int maxFd = maxClients + 4;     
+    int maxFd = maxClients + 2;     
     struct pollfd * connectionFDS = calloc(maxFd, sizeof(struct pollfd));
     connectionFDS[0].fd = serverSFD;
     connectionFDS[0].events = POLLIN;
 
-    connectionFDS[1].fd = evClose;
+    connectionFDS[1].fd = fdListen;
     connectionFDS[1].events = POLLIN;
 
-    connectionFDS[2].fd = fdListen;
-    connectionFDS[2].events = POLLIN;
-
-    for (int i=3; i < maxFd; i++) { 
+    for (int i=2; i < maxFd; i++) { 
         connectionFDS[i].fd = -1;
-        connectionFDS[i].events = POLLIN; 
+        connectionFDS[i].events = POLLIN || POLLHUP; 
     }
     int pollRes = 0;
     int timeout = 60*1000;      //1 min
@@ -265,52 +258,30 @@ void startServer () {
 
 
     while(!sigiq) {
-
+        
         //Controllo se devo rimettermi in ascolto di fd
-        if (connectionFDS[2].revents == POLLIN) {
+        if (connectionFDS[1].revents == POLLIN) {
             void * eventB = malloc(8);
             memset (eventB, 0, 8);
             read (fdListen, eventB, 8);
             int toListen = atoi(eventB);
-            printf("Listen: %d\n\n",toListen);  //TEST
-            for (int i=3; i<maxFd; i++) {
-                if (connectionFDS[i].fd == toListen) connectionFDS[i].events=POLLIN;
+            for (int i=2; i<maxFd; i++) {
+                if (connectionFDS[i].fd == toListen) connectionFDS[i].events=POLLIN || POLLHUP;
             }
             free(eventB);
         }
 
-        //Controllo se devo chiudere una socket prima della poll
-        if (connectionFDS[1].revents == POLLIN) {
-            //pthread_mutex_lock(&mutex);   // Maybe gotta lock ???
-            void * eventB = malloc(8);
-            memset (eventB, 0, 8);
-            read (evClose, eventB, 8);
-            int * toClose = eventB;
-            printf("CLOSE SOCKET %d\n",*toClose);
-            for (int i=3; i<maxFd; i++) {       // Voglio chiudere 5, trova solo 3 ???
-                if (connectionFDS[i].fd == *toClose) connectionFDS[i].fd = -1;
-            }
-            deleteNode(*toClose,&socketsList);
-            close(*toClose);
-
-            pthread_mutex_lock(&mutex);
-            logOperation(CC, *toClose, 0, NULL);
-            free(eventB);
-            pthread_mutex_unlock(&mutex);
-
-        }
-
-        //Controllo se ci sono altre richieste
+        //Controllo se ci sono richieste
         if ((pollRes = poll(connectionFDS,maxFd,timeout))==-1)
             errEx();
+        //Se è scaduto il timeout senza nessun client connesso al momento
         if (pollRes == 0) {
-            printf("Sessione scaduta\n");
-            //no clients connected atm
+            printf("Server refresh\n");
         }
 
         //if client richiede connect
         if (connectionFDS[0].revents == POLLIN && !sighup) {
-            int j = 3;
+            int j = 2;
             while(connectionFDS[j].fd!=-1 && j<maxFd) j++; 
             //controllo se ho spazio per gestire più client
             if (j<=maxFd) {
@@ -327,9 +298,21 @@ void startServer () {
         }
 
         //Se un client già connesso ha una richiesta
-        int closedConn=3;
-        for (int i=3;i<maxFd;i++){
+        int closedConn = 2;
+        for (int i=2;i<maxFd;i++){
             if (sighup && connectionFDS[i].fd==-1) closedConn++;
+
+            // Se un client si è disconnesso
+            if (connectionFDS[i].revents==POLLHUP) {
+                int toClose = connectionFDS[i].fd;
+                connectionFDS[i].fd = -1;
+                close(toClose);
+                pthread_mutex_lock(&mutex);
+                logOperation(CC, toClose, 0, NULL);
+                printf("CLOSE %d\n",toClose);   //TEST
+                pthread_mutex_unlock(&mutex);
+            }
+
             if (connectionFDS[i].revents==POLLIN && connectionFDS[i].fd!=-1) {
                 pthread_mutex_lock(&mutex);
                 if (requestsQueue == NULL) {
@@ -340,7 +323,7 @@ void startServer () {
                     lastRequest->next = addNode(connectionFDS[i].fd);
                     lastRequest=lastRequest->next;
                 }
-                printf("Add to req list with count %d: %d\n",listCount(requestsQueue),connectionFDS[i].fd);    //TEST
+                //printf("Add to req list with count %d: %d\n",listCount(requestsQueue),connectionFDS[i].fd);    //TEST
                 connectionFDS[i].events = 0;
                 pthread_cond_signal(&newReq);
                 pthread_mutex_unlock(&mutex);
@@ -348,7 +331,7 @@ void startServer () {
         }
         if (sighup && closedConn==maxFd) break;
     }
-
+        
     // Se arriva segnale SIGINT o SIGQUIT chiudo immediatamente il server
     if (sigiq) {
         connectionFDS[0].fd = -1;
@@ -461,7 +444,7 @@ void * manageRequest() {
         int code;
         if (tmp!=NULL) code = atoi(tmp);
 
-        printf("%d %s\n",code,request); //TEST
+        //printf("%d %s\n",code,request); //TEST
         char * reqArg;
 
         // Disabilito cancellazione mentre servo richiesta per non lasciare garbage nell'ambiente
@@ -655,12 +638,14 @@ void * manageRequest() {
             }
 
             // Chiusura di una socket client          
-            case CLS: {
+            /*case CLS: {
+                pthread_mutex_lock(&mutex);
                 void * toClose = &currentRequest;
-                sendAnswer(currentRequest, SUCCESS);
                 write (evClose, toClose, 8);
+                sendAnswer(currentRequest, SUCCESS);
+                pthread_mutex_unlock(&mutex);
                 break;
-            }
+            }*/
 
             // Creazione di un nuovo file vuoto //
             case PUC: {

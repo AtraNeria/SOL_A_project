@@ -102,7 +102,7 @@ int openConnection (const char* sockname, int msec, const struct timespec abstim
 
 int closeConnection (const char* sockname) {
 
-    int res;
+    /*int res;
     // Richiesta al server
     char * closeReq = calloc(MAX_BUF_SIZE,sizeof(char));
     strcpy(closeReq, CLOSE_S);
@@ -122,7 +122,8 @@ int closeConnection (const char* sockname) {
     free (toFreeWrite);
     free (closeReq);
     free (toFree);
-    return res;
+    return res;*/
+    return close(clientSFD);
 }
 
 int openFile (const char* pathname, int flags){

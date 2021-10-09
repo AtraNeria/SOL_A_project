@@ -55,20 +55,21 @@ test1:
 	mv main.out client.out Test1
 	cd ./Test1; valgrind --leak-check=full ./main.out & ./test1.sh
 
-test2:test1
+test2:
 	make all
 	mv ./main.out ./client.out ./Test2
+	cd ./Test2; ./main.out & ./test2.sh
 
 cleantest1:
+	make cleanall
 	rm ./Test1/log.txt ./Test1/server ./Test1/client.out ./Test1/main.out
 	rm ./Test1/ReadFile/*
-	make cleanall
 
 cleantest2:
+	make cleanall
 	rm ./Test2/log.txt ./Test2/server ./Test2/client.out ./Test2/main.out
 	rm ./Test2/Read/*
 	rm ./Test2/Expelled/*
-	make cleanall
 
 cleantestAll:
 	rm ./Test1/log.txt ./Test1/server ./Test1/client.out ./Test1/main.out

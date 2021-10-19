@@ -27,6 +27,8 @@ void cleanup(pthread_t workers[], int index, node * socket_list);
 //inizializza lo storage all'arrivo del primo file; ne ritorna il puntatore
 fileNode * initStorage(FILE * f, char * fname, int fOwner);
 
+void * handle ();
+
 /* Invia un file f al client fd per l'operazione di codice op.
     Restituisce 0 se l'invio ha successo, -1 altrimenti
 */
@@ -54,10 +56,6 @@ int checkPrivilege (int client, fileNode * file);
 */
 int expelFile (int fd, fileNode * file);
 
-/* Segnala sull'eventfd fdListen fd
-*/
-void writeListenFd (int fd);
-
 // Setta la flag sigiq_flag in caso di ricezione SIGINT o SIGQUIT
 void setIqFl ();
 // Setta la flag sighup_flag in caso di ricezione SIGHUP
@@ -76,17 +74,20 @@ FILE * logging;
 
 node * requestsQueue=NULL;
 node * lastRequest;
-pthread_mutex_t mutex;
+pthread_mutex_t mutex=PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t mtx=PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t queueAccess=PTHREAD_MUTEX_INITIALIZER;
+
 pthread_cond_t newReq = PTHREAD_COND_INITIALIZER;
 pthread_cond_t fileUnlocked = PTHREAD_COND_INITIALIZER;
+pthread_cond_t toListenFree = PTHREAD_COND_INITIALIZER;
+int toListen = -1;
 
 int fileCount = 0;
 ssize_t usedBytes = 0;
 fileNode * storage=NULL;
 fileNode * lastAddedFile=NULL;
 
-int evClose;
-int fdListen;
 
 // Macro per le operazioni standard di fine richiesta; la seconda esclude l'invio di una risposta
 // END_NOLISTEN è per i casi in cui il rimettersi in ascolto per il client è già stato segnalato
@@ -164,64 +165,27 @@ void startServer () {
     if (sigfillset(&sigmask)==-1) errEx();
     if (pthread_sigmask (SIG_SETMASK, &sigmask, NULL)!= 0) errEx();
 
+    // Inizializzo le flag dei segnali
     sigiq = 0;
     sighup = 0;
-    // Definisco la gestione segnali
-    //Per SIGINT e SIGQUIT
-    struct sigaction immediate;
-    memset(&immediate, 0, sizeof(struct sigaction));
-    immediate.sa_handler = setIqFl;
-    immediate.sa_flags = SA_RESTART;
-    //Specifico segnali da ingnorare durante l'installazione degli handler
-    sigemptyset(&immediate.sa_mask);
-    sigaddset(&immediate.sa_mask,SIGINT);
-    sigaddset(&immediate.sa_mask, SIGQUIT);
-    //Installo gli handler
-    if (sigaction(SIGINT,&immediate,NULL)==-1) errEx();
-    if (sigaction(SIGQUIT,&immediate,NULL)==-1) errEx();
-
-    //Per SIGHUP
-    struct sigaction finishFirst;
-    memset(&finishFirst, 0, sizeof(sigaction));
-    finishFirst.sa_handler = setShFl;
-    finishFirst.sa_flags = SA_RESTART;
-    sigemptyset(&finishFirst.sa_mask);
-    sigaddset(&finishFirst.sa_mask,SIGHUP);
-    if (sigaction(SIGHUP,&finishFirst,NULL)==-1) errEx();
-
-    // Ignoro SIGPIPE
-    struct sigaction ignore;
-    memset(&ignore, 0, sizeof(sigaction));
-    ignore.sa_handler = SIG_IGN;
-    ignore.sa_flags = SA_RESTART;
-    sigemptyset(&ignore.sa_mask);
-    sigaddset(&finishFirst.sa_mask,SIGPIPE);
-    if (sigaction(SIGPIPE,&ignore,NULL)==-1) errEx();
-
-    // Tolgo la maschera dei segnali
-    if (sigemptyset(&sigmask)==-1) errEx();
-    if (pthread_sigmask (SIG_SETMASK, &sigmask, NULL)!= 0) errEx();
 
     // Apro la socket del server
     int serverSFD;
     if ((serverSFD = socket(AF_UNIX, SOCK_STREAM,0))==-1)
         errEx();
-
     node * socketsList = addNode(serverSFD);    //TO-DO FREE
     node * currSock = socketsList;
-
     struct sockaddr_un address;
     address.sun_family = AF_UNIX;
     strcpy(address.sun_path, "./server");
-    
     if (bind(serverSFD, (struct sockaddr *)&address, sizeof(address))==-1){
         currSock = NULL;
         socketsList = popNode (socketsList);
         errEx();
     }
-    
-    pthread_t * workers = calloc(threadQuantity,sizeof(pthread_t));
 
+    // Creo i workers    
+    pthread_t * workers = calloc(threadQuantity,sizeof(pthread_t));
     int wsFailed = 0;
     if ((wsFailed=createWorkers(workers)) !=-1) {
         printf ("Problema riscontrato nella creazione dei thread\n");
@@ -235,53 +199,53 @@ void startServer () {
         errEx();
     }
 
-    // Fd evento per reiniziare a monitorare client dopo la gestione di una loro richiesta
-    fdListen = eventfd(0,0);
-    currSock->next = addNode(fdListen);
-    currSock=currSock->next;
-    // Client + server + eventFD
-    int maxFd = maxClients + 2;     
+    // Inizializzo la struct per poll
+    // Clients + server
+    int maxFd = maxClients + 1;     
     struct pollfd * connectionFDS = calloc(maxFd, sizeof(struct pollfd));
     connectionFDS[0].fd = serverSFD;
     connectionFDS[0].events = POLLIN;
-
-    connectionFDS[1].fd = fdListen;
-    connectionFDS[1].events = POLLIN;
-
-    for (int i=2; i < maxFd; i++) { 
+    for (int i=1; i < maxFd; i++) { 
         connectionFDS[i].fd = -1;
-        connectionFDS[i].events = POLLIN || POLLHUP; 
+        connectionFDS[i].events = POLLIN; 
     }
     int pollRes = 0;
     int timeout = 60*1000;      //1 min
 
+    // Creo thread per gestire i segnali
+    pthread_t * signalHandler = calloc(1,sizeof(pthread_t));
+    if (pthread_create(signalHandler,NULL,handle,NULL)!=0) errEx();
+
 
 
     while(!sigiq) {
-        
-        //Controllo se devo rimettermi in ascolto di fd
-        if (connectionFDS[1].revents == POLLIN) {
-            void * eventB = malloc(8);
-            memset (eventB, 0, 8);
-            read (fdListen, eventB, 8);
-            int toListen = atoi(eventB);
-            for (int i=2; i<maxFd; i++) {
-                if (connectionFDS[i].fd == toListen) connectionFDS[i].events=POLLIN || POLLHUP;
-            }
-            free(eventB);
-        }
+
 
         //Controllo se ci sono richieste
-        if ((pollRes = poll(connectionFDS,maxFd,timeout))==-1)
+        if ((pollRes = poll(connectionFDS,maxFd,30))==-1)
             errEx();
         //Se è scaduto il timeout senza nessun client connesso al momento
         if (pollRes == 0) {
             printf("Server refresh\n");
         }
 
+        //Controllo se devo rimettermi in ascolto di fd
+        pthread_mutex_lock (&mtx);
+        if (toListen!=-1) {
+            printf("LISTEN TO %d\n",toListen);  //TEST
+            for (int k=1;k<maxFd;k++) 
+                if (connectionFDS[k].fd == toListen) {
+                    connectionFDS[k].events=POLLIN;
+                    break;
+                }
+            toListen = -1;
+        }
+        pthread_mutex_unlock(&mtx);
+        pthread_cond_signal(&toListenFree);
+
         //if client richiede connect
         if (connectionFDS[0].revents == POLLIN && !sighup) {
-            int j = 2;
+            int j = 1;
             while(connectionFDS[j].fd!=-1 && j<maxFd) j++; 
             //controllo se ho spazio per gestire più client
             if (j<=maxFd) {
@@ -298,23 +262,24 @@ void startServer () {
         }
 
         //Se un client già connesso ha una richiesta
-        int closedConn = 2;
-        for (int i=2;i<maxFd;i++){
+        int closedConn = 1;
+        for (int i=1;i<maxFd;i++){
+            //printf("%d/%d\n",i,maxFd);  //TEST
             if (sighup && connectionFDS[i].fd==-1) closedConn++;
 
             // Se un client si è disconnesso
-            if (connectionFDS[i].revents==POLLHUP) {
+            if (connectionFDS[i].fd!=-1 && (connectionFDS[i].revents==POLLHUP || connectionFDS[i].revents==POLLHUP&POLLIN)) {
                 int toClose = connectionFDS[i].fd;
                 connectionFDS[i].fd = -1;
-                close(toClose);
+                close(toClose);                
                 pthread_mutex_lock(&mutex);
                 logOperation(CC, toClose, 0, NULL);
-                printf("CLOSE %d\n",toClose);   //TEST
+                printf("CLOSE %d %d\n",toClose,connectionFDS[i].fd);   //TEST
                 pthread_mutex_unlock(&mutex);
             }
 
-            if (connectionFDS[i].revents==POLLIN && connectionFDS[i].fd!=-1) {
-                pthread_mutex_lock(&mutex);
+            if (connectionFDS[i].revents==POLLIN && connectionFDS[i].revents!=POLLHUP && connectionFDS[i].fd!=-1) {
+                pthread_mutex_lock(&queueAccess); //STUCK ON THIS MUTEX WHEN ENTER IF AND TOLISTEN IS CHANGED
                 if (requestsQueue == NULL) {
                     requestsQueue = addNode(connectionFDS[i].fd);
                     lastRequest = requestsQueue;
@@ -326,12 +291,13 @@ void startServer () {
                 //printf("Add to req list with count %d: %d\n",listCount(requestsQueue),connectionFDS[i].fd);    //TEST
                 connectionFDS[i].events = 0;
                 pthread_cond_signal(&newReq);
-                pthread_mutex_unlock(&mutex);
+                pthread_mutex_unlock(&queueAccess);
             }
         }
         if (sighup && closedConn==maxFd) break;
     }
-        
+    //printf("Fuori loop %d %d\n",sigiq,sighup);  //TEST
+    
     // Se arriva segnale SIGINT o SIGQUIT chiudo immediatamente il server
     if (sigiq) {
         connectionFDS[0].fd = -1;
@@ -350,6 +316,11 @@ void startServer () {
 }
 
 void cleanup(pthread_t workers[], int index, node * socket_list) {
+
+    printf("Cleanup code"); //TEST
+    fflush(logging);
+    fclose(logging);
+
     for (int i=0; i<index; i++) {       //join dei thread aperti
         pthread_cancel(workers[i]);
         pthread_join(workers[i], NULL);
@@ -395,27 +366,23 @@ fileNode * initStorage(FILE * f, char * fname, int fOwner){
 
 void * manageRequest() {
 
-    // Setto le sigmask per far gestire i segnali solo da thread master
-    sigset_t sigmask;
-    if (sigfillset(&sigmask)==-1) pthread_exit(NULL);
-    if (pthread_sigmask (SIG_SETMASK, &sigmask, NULL) != 0) pthread_exit(NULL);
-    if (pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS,NULL)!=0) pthread_exit(NULL);
-
     //fd associato alla richiesta attuale
     int currentRequest;
 
     //Finchè accetto nuove richieste
     while(TRUE) {
 
-        pthread_mutex_lock(&mutex);
+        pthread_mutex_lock(&queueAccess);
         // Prelevo fd da servire dalla queue
-        while (requestsQueue==NULL ) {
-            pthread_cond_wait(&newReq,&mutex);
+        if (requestsQueue==NULL ) {
+            pthread_cond_wait(&newReq,&queueAccess);
         }
         currentRequest = requestsQueue->descriptor;
         requestsQueue = popNode(requestsQueue);
         if (requestsQueue==NULL) lastRequest=NULL;
+        pthread_mutex_unlock(&queueAccess);
 
+        //pthread_mutex_lock(&mutex);
         // Leggo la richiesta
         ssize_t reqRes = 1;
         size_t tr = MAX_BUF_SIZE;
@@ -428,7 +395,7 @@ void * manageRequest() {
             totBytesR+=reqRes;
             tr-=reqRes;
         }
-        pthread_mutex_unlock(&mutex);
+        //pthread_mutex_unlock(&mutex);
 
         // Creo una copia del buffer per tokenizzare
         char * tk = calloc(MAX_BUF_SIZE, sizeof(char));
@@ -449,6 +416,7 @@ void * manageRequest() {
 
         // Disabilito cancellazione mentre servo richiesta per non lasciare garbage nell'ambiente
         if (pthread_setcancelstate(PTHREAD_CANCEL_DISABLE,NULL)!=0) pthread_exit(NULL);
+
         switch (code) {
 
             // Richiesta di lettura //
@@ -636,16 +604,6 @@ void * manageRequest() {
                 pthread_mutex_unlock(&mutex);
                 break;
             }
-
-            // Chiusura di una socket client          
-            /*case CLS: {
-                pthread_mutex_lock(&mutex);
-                void * toClose = &currentRequest;
-                write (evClose, toClose, 8);
-                sendAnswer(currentRequest, SUCCESS);
-                pthread_mutex_unlock(&mutex);
-                break;
-            }*/
 
             // Creazione di un nuovo file vuoto //
             case PUC: {
@@ -1007,22 +965,48 @@ void logOperation (int op, int process, int res, char * file) {
     }
 }
 
-void setIqFl () {
-    sigiq = 1;
-}
-
-void setShFl () {
-    sighup = 1;
+void * handle (){
+    sigset_t * set=calloc(1,sizeof(sigset_t));
+    if (sigaddset(set,SIGHUP)==-1) pthread_exit(NULL);
+    if (sigaddset(set,SIGINT)==-1) pthread_exit(NULL);
+    if (sigaddset(set,SIGQUIT)==-1) pthread_exit(NULL);
+    int * signal;
+    signal = malloc(sizeof(int));
+    
+    int rec = 0;
+    
+    while(!rec) {
+        sigwait (set,signal);
+        switch (*signal) {
+    
+            case SIGHUP:
+                sighup=1;
+                rec=1;
+                break;
+            case SIGINT:
+                sigiq=1;
+                rec=1;
+                break;
+            case SIGQUIT:
+                sigiq=1;
+                rec=1;
+                break;
+            default:
+                break;
+        }
+    }
+    free(signal);
+    pthread_exit(NULL);
 }
 
 void writeListenFd (int fd) {
+    
+    pthread_mutex_lock(&mtx);
+    if (toListen!=-1) pthread_cond_wait(&toListenFree,&mtx);
+    toListen=fd;
+    printf("WRITING TO LISTEN %d\n",fd);
+    pthread_mutex_unlock(&mtx);
 
-    char * toListen = calloc(8,1);
-    sprintf (toListen,"%d",fd);
-    if (write (fdListen, toListen, 8) ==-1) {
-        free (toListen);
-        errEx();}
-    free (toListen);
 }
 
 int waitForAck (int fd) {

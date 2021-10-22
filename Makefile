@@ -57,7 +57,7 @@ test1:
 
 test2:
 	make all
-	mv ./main.out ./client.out ./Test2
+	mv ./main.out ./client.out Test2
 	cd ./Test2; ./main.out & ./test2.sh
 
 cleantest1:
@@ -68,7 +68,7 @@ cleantest1:
 cleantest2:
 	make cleanall
 	rm ./Test2/log.txt ./Test2/server ./Test2/client.out ./Test2/main.out
-	rm ./Test2/Read/*
+	rm ./Test2/Expelled_2nd/*
 	rm ./Test2/Expelled/*
 
 cleantestAll:

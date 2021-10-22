@@ -57,7 +57,7 @@ int bufferCheck(void * buffer);
 /* Estrae il nome di un file dal suo percordo in fullpath, salvandolo in name.
     Restituisce 0 in caso di successo, -1 altrimenti
 */
-int nameFromPath (char * fullpath, char ** name);
+int nameFromPath (char * fullpath, char * name);
 
 /* Invia esito res di un'operazione sulla socket fd.
     Restituisce 0 se l'invio ha successo, -1 altrimenti

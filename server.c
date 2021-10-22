@@ -22,11 +22,15 @@
 
 void errEx ();
 void init (int index, char * string);
-void cleanup(pthread_t workers[], int index, node * socket_list);
+void cleanup(pthread_t workers[], pthread_t * sigHandler, int index, node * socket_list);
 
 //inizializza lo storage all'arrivo del primo file; ne ritorna il puntatore
 fileNode * initStorage(FILE * f, char * fname, int fOwner);
 
+/* Funzione di avvio del thread di supporto per la gestione segnali.
+    Setta le flag sigiq e sighup in caso di ricezione di segnale
+    SIGINT, SIGQUIT o SIGHUP.
+*/
 void * handle ();
 
 /* Invia un file f al client fd per l'operazione di codice op.
@@ -55,11 +59,6 @@ int checkPrivilege (int client, fileNode * file);
     Restituisce 0 in caso successo, -1 altrimenti
 */
 int expelFile (int fd, fileNode * file);
-
-// Setta la flag sigiq_flag in caso di ricezione SIGINT o SIGQUIT
-void setIqFl ();
-// Setta la flag sighup_flag in caso di ricezione SIGHUP
-void setShFl ();
 
 // Flags settate dalla gestione dei segnali
 volatile sig_atomic_t sigiq;
@@ -97,7 +96,7 @@ fileNode * lastAddedFile=NULL;
 
 
 void errEx () {
-    perror("Error:");
+    perror("Error");
     exit(EXIT_FAILURE);
 }
 
@@ -184,18 +183,23 @@ void startServer () {
         errEx();
     }
 
+    // Creo thread per gestire i segnali
+    pthread_t * signalHandler = calloc(1,sizeof(pthread_t));
+    if (pthread_create(signalHandler,NULL,handle,NULL)!=0) errEx();
+
+
     // Creo i workers    
     pthread_t * workers = calloc(threadQuantity,sizeof(pthread_t));
     int wsFailed = 0;
     if ((wsFailed=createWorkers(workers)) !=-1) {
         printf ("Problema riscontrato nella creazione dei thread\n");
-        perror("Error:");
-        cleanup(workers, wsFailed, socketsList);
+        perror("Error");
+        cleanup(workers, signalHandler, wsFailed, socketsList);
         exit(EXIT_FAILURE);
     }
 
     if ((listen(serverSFD, queueLenght))==-1){
-        cleanup(workers, threadQuantity, socketsList);
+        cleanup(workers, signalHandler, wsFailed, socketsList);
         errEx();
     }
 
@@ -212,29 +216,23 @@ void startServer () {
     int pollRes = 0;
     int timeout = 60*1000;      //1 min
 
-    // Creo thread per gestire i segnali
-    pthread_t * signalHandler = calloc(1,sizeof(pthread_t));
-    if (pthread_create(signalHandler,NULL,handle,NULL)!=0) errEx();
-
-
 
     while(!sigiq) {
-
 
         //Controllo se ci sono richieste
         if ((pollRes = poll(connectionFDS,maxFd,30))==-1)
             errEx();
         //Se è scaduto il timeout senza nessun client connesso al momento
         if (pollRes == 0) {
-            printf("Server refresh\n");
+            //printf("Server refresh\n");
         }
 
         //Controllo se devo rimettermi in ascolto di fd
         pthread_mutex_lock (&mtx);
         if (toListen!=-1) {
-            printf("LISTEN TO %d\n",toListen);  //TEST
             for (int k=1;k<maxFd;k++) 
                 if (connectionFDS[k].fd == toListen) {
+                    //printf("Listen to %d\n",connectionFDS[k].fd);   //TEST
                     connectionFDS[k].events=POLLIN;
                     break;
                 }
@@ -261,25 +259,25 @@ void startServer () {
             else printf ("Tentata connessione\n");
         }
 
-        //Se un client già connesso ha una richiesta
         int closedConn = 1;
         for (int i=1;i<maxFd;i++){
-            //printf("%d/%d\n",i,maxFd);  //TEST
+
             if (sighup && connectionFDS[i].fd==-1) closedConn++;
 
             // Se un client si è disconnesso
-            if (connectionFDS[i].fd!=-1 && (connectionFDS[i].revents==POLLHUP || connectionFDS[i].revents==POLLHUP&POLLIN)) {
+            if (connectionFDS[i].fd!=-1 && (connectionFDS[i].revents==POLLHUP)) {
                 int toClose = connectionFDS[i].fd;
                 connectionFDS[i].fd = -1;
                 close(toClose);                
                 pthread_mutex_lock(&mutex);
                 logOperation(CC, toClose, 0, NULL);
-                printf("CLOSE %d %d\n",toClose,connectionFDS[i].fd);   //TEST
+                //printf("CLOSE %d %d\n",toClose,connectionFDS[i].fd);   //TEST
                 pthread_mutex_unlock(&mutex);
             }
 
+            //Se un client già connesso ha una richiesta
             if (connectionFDS[i].revents==POLLIN && connectionFDS[i].revents!=POLLHUP && connectionFDS[i].fd!=-1) {
-                pthread_mutex_lock(&queueAccess); //STUCK ON THIS MUTEX WHEN ENTER IF AND TOLISTEN IS CHANGED
+                pthread_mutex_lock(&queueAccess);
                 if (requestsQueue == NULL) {
                     requestsQueue = addNode(connectionFDS[i].fd);
                     lastRequest = requestsQueue;
@@ -296,12 +294,11 @@ void startServer () {
         }
         if (sighup && closedConn==maxFd) break;
     }
-    //printf("Fuori loop %d %d\n",sigiq,sighup);  //TEST
-    
+
     // Se arriva segnale SIGINT o SIGQUIT chiudo immediatamente il server
     if (sigiq) {
         connectionFDS[0].fd = -1;
-        cleanup(workers,threadQuantity, socketsList);
+        cleanup(workers, signalHandler, wsFailed, socketsList);;
         free (connectionFDS);
         _exit(EXIT_SUCCESS);
     }
@@ -309,30 +306,38 @@ void startServer () {
     // Se arriva SIGHUP servo le richieste che ho al momento prima di chiudere il server
     if (sighup) {
         connectionFDS[0].fd = -1;
-        cleanup(workers,threadQuantity, socketsList);
+        cleanup(workers, signalHandler, wsFailed, socketsList);;
         free (connectionFDS);
         _exit(EXIT_SUCCESS);
     }
 }
 
-void cleanup(pthread_t workers[], int index, node * socket_list) {
+void cleanup(pthread_t workers[], pthread_t * sigHandler, int index, node * socket_list) {
 
+    // Chiusura del file di logging delle operazioni
     printf("Cleanup code"); //TEST
     fflush(logging);
     fclose(logging);
 
-    for (int i=0; i<index; i++) {       //join dei thread aperti
+    // Join e free dei thread lavoratori
+    for (int i=0; i<index; i++) {
         pthread_cancel(workers[i]);
         pthread_join(workers[i], NULL);
     }
     free(workers);
 
-    while (socket_list != NULL) {       //chiusura sockets
+    // Join e free del thread di gestione dei segnali
+    pthread_join(*sigHandler,NULL);
+    free(sigHandler);
+
+    // Chiusura dei socket
+    while (socket_list != NULL) {
         if (close(socket_list->descriptor)!=0) errEx();
         socket_list = popNode(socket_list);
     }
 
-    while (storage!=NULL) {         //chiusura e free file rimasti
+    // Svuotamento del file storage
+    while (storage!=NULL) {
        deleteFile(storage, &storage, &lastAddedFile);
     }
     
@@ -411,7 +416,6 @@ void * manageRequest() {
         int code;
         if (tmp!=NULL) code = atoi(tmp);
 
-        //printf("%d %s\n",code,request); //TEST
         char * reqArg;
 
         // Disabilito cancellazione mentre servo richiesta per non lasciare garbage nell'ambiente
@@ -490,7 +494,6 @@ void * manageRequest() {
                            
                         else {
                             // Se posso scrivere controllo di avere spazio disponibile; in caso procedo all'espulsione di file vittima
-                            //printf("Used bytes: %li/%li and fSize %li\n",usedBytes,capacity,fSize); //TEST
                             while (usedBytes+fSize > capacity) {
                                 if (expelFile(currentRequest,storage)==-1) {
                                     END_NOLISTEN(WR)
@@ -569,7 +572,7 @@ void * manageRequest() {
                     fileNode * fToOp;
                     if (searchFile(reqArg, storage, &fToOp)==-1) {
                         res = -1;
-                    }   
+                    }
                     END_REQ(OP) 
                 }
                 pthread_mutex_unlock(&mutex);
@@ -608,47 +611,47 @@ void * manageRequest() {
             // Creazione di un nuovo file vuoto //
             case PUC: {
                 pthread_mutex_lock(&mutex);
-                printf ("Capacity: %d/%d\n",fileCount,storageDim);
+                //printf ("Capacity: %d/%d\n",fileCount,storageDim);  //TEST
                 int res = 0;
-
-                // Se sono a capacità massima avverto il client dell'espulsione di un file e aspetto feedback
-                if (fileCount == storageDim) {
-                    if (expelFile(currentRequest,storage)==-1) {
-                        res = -1;
-                        END_NOLISTEN(PUC)
-                    }
-                }
                 // Ricavo nome file
                 reqArg = strtok_r (NULL, EOBUFF, &ptr);
+                // Se ho fallito a ricavare il nome
                 if (reqArg == NULL) {
                     res = -1;
                     END_REQ(PUC)
+                    goto endCreate;
+                }
+
+                // Se sono a capacità massima avverto il client dell'espulsione di un file e aspetto feedback
+                while (fileCount >= storageDim) {
+                    if (expelFile(currentRequest,storage)==-1) {
+                        res = -1;
+                        END_NOLISTEN(PUC)
+                        goto endCreate;
+                    }
                 }
 
                 // Se è il primo file nello storage lo inizializzo
+                if (storage == NULL) {
+                    storage = initStorage (NULL, reqArg, 0);
+                    fileCount++;
+                }
                 else {
-                    if (storage == NULL) {
-                        storage = initStorage (NULL, reqArg, 0);
+                    // Se non è il primo file lo aggiungo
+                    fileNode * toCr;
+                    if (searchFile(reqArg,storage,&toCr) == -1) {
+                        lastAddedFile->next = newFile (NULL, 0, reqArg, 0, &lastAddedFile);
+                        lastAddedFile = lastAddedFile->next;
                         fileCount++;
-                        END_REQ(PUC)
+                        //printf("Last file: %s\n",lastAddedFile->fileName);  //TEST
                     }
                     else {
-                        // Se non è il primo file lo aggiungo
-                        fileNode * toCr;
-                        if (searchFile(reqArg,storage,&toCr) == -1) {
-                            lastAddedFile->next = newFile (NULL, 0, reqArg, 0, &lastAddedFile);
-                            lastAddedFile = lastAddedFile->next;
-                            fileCount++;
-                            printf("Last file: %s\n",lastAddedFile->fileName);
-                            END_REQ(PUC)
-                        }
-                        else {
-                            res = -1;
-                            END_REQ(PUC);
-                        }
+                        res = -1;
                     }
-                    pthread_mutex_unlock(&mutex);
                 }
+                END_REQ(PUC);
+                endCreate:
+                pthread_mutex_unlock(&mutex);
                 break;
             }
 
@@ -883,7 +886,6 @@ int sendFile (int fd, fileNode * f, int op) {
         return -1;
     }
     // Torno alla fine del file per prepararlo ad eventuali altre operazioni
-    //printf ("SEND %li of: %s\n",r,(char*)buff);   //TEST
     fseek (f->fPointer,0,SEEK_END);
 
     // Invio al client
@@ -897,7 +899,7 @@ int sendFile (int fd, fileNode * f, int op) {
         writeSize -= nWritten;
         totBytesWritten += nWritten;
     }
-    if(op!=RD) write(fd, EOBUFF, EOB_SIZE);
+    if(op!=RD || op!=EXF) write(fd, EOBUFF, EOB_SIZE);
     free (toFree);
     return 0; 
 }
@@ -966,7 +968,7 @@ void logOperation (int op, int process, int res, char * file) {
 }
 
 void * handle (){
-    sigset_t * set=calloc(1,sizeof(sigset_t));
+    sigset_t * set = calloc(1,sizeof(sigset_t));
     if (sigaddset(set,SIGHUP)==-1) pthread_exit(NULL);
     if (sigaddset(set,SIGINT)==-1) pthread_exit(NULL);
     if (sigaddset(set,SIGQUIT)==-1) pthread_exit(NULL);
@@ -996,6 +998,7 @@ void * handle (){
         }
     }
     free(signal);
+    free(set);
     pthread_exit(NULL);
 }
 
@@ -1004,7 +1007,7 @@ void writeListenFd (int fd) {
     pthread_mutex_lock(&mtx);
     if (toListen!=-1) pthread_cond_wait(&toListenFree,&mtx);
     toListen=fd;
-    printf("WRITING TO LISTEN %d\n",fd);
+    //printf("WRITING TO LISTEN %d\n",fd);    //TEST
     pthread_mutex_unlock(&mtx);
 
 }
@@ -1035,7 +1038,7 @@ int sendHeader (int fd, char * pathname, ssize_t size) {
     int headerLen = strlen(pathname)+strlen(",£")+strlen(s);
     char msg[headerLen+1];
     sprintf (msg, "%s,%li£", pathname, size);
-    printf("Header: %s %li\n",msg,sizeof(char)*strlen(msg));
+    //printf("Header: %s %li\n",msg,sizeof(char)*strlen(msg));  //TEST
 
     int res = 0;
     ssize_t nToWrite = sizeof(char) * strlen (msg);
@@ -1049,7 +1052,6 @@ int sendHeader (int fd, char * pathname, ssize_t size) {
         totBytesWritten+=nWritten;
         nToWrite-=nWritten;
     }
-    printf("Written: %li\n",totBytesWritten);
     return res;
 }
 
@@ -1061,7 +1063,7 @@ int checkPrivilege (int client, fileNode * file) {
 int expelFile (int fd, fileNode * file) {
 
     // Controllo se il client attuale ha i permessi per ricevere il file da espellere
-    if (!checkPrivilege(fd,storage)) {
+    if (checkPrivilege(fd,storage)==-1) {
         // Se fallisco a comunicare al client di attendere l'eliminazione
         if (sendAnswer(fd,WAIT)==-1 || waitForAck(fd)==-1) {
             logOperation(EXF, fd, FAILURE, file->fileName);

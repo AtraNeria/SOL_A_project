@@ -1,8 +1,7 @@
 #!/bin/bash
 
 #Salvo PID del server
-serverPID=$(pgrep main)
-echo "PID DEL SERVER   $serverPID"
+serverPID=$(pgrep -f main.out)
 
 #Primo client testa -W, -d, -r
 ./client.out -p -t 200 -f server -W ./WriteFile/w1,./WriteFile/w2 -d ./ReadFile -r ./WriteFile/w1,./WriteFile/w2 &

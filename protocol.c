@@ -18,20 +18,16 @@ int bufferCheck(void * buffer){
     }
 }
 
-int nameFromPath (char * fullpath, char ** name) {
+int nameFromPath (char * fullpath, char * name) {
     char * dirless;
-    char * ptr;
+    char * ptr=NULL;
     char * tmp;
     dirless = strtok_r (fullpath,"/", &ptr);
     while ((tmp=strtok_r(NULL,"/", &ptr))!=NULL) {
-        dirless = tmp;
+        dirless=tmp;
     }
-    if (dirless == NULL) return -1;
-    else {
-        strcpy (*name, dirless);
-        return 0;
-    } 
-
+    strcpy (name, dirless);
+    return 0;
 }
 
 int sendAnswer (int fd, ssize_t res) {

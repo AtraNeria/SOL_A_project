@@ -112,7 +112,7 @@ int main (int argc, char ** argv){
 
                     if(optarg != NULL) {
     
-                        char * wArg = calloc(strlen(optarg),sizeof(char));
+                        char * wArg = calloc(strlen(optarg)+1,sizeof(char));
                         strcpy(wArg,optarg); 
                         char * dirName = strtok(wArg, ",");
                         char * numFiles = strtok(NULL, ",");
@@ -163,7 +163,7 @@ int main (int argc, char ** argv){
                 if (connOpen){
 
                     if (optarg!=NULL) {
-                        char * rArgs = calloc(strlen(optarg),sizeof(char));
+                        char * rArgs = calloc(strlen(optarg)+1,sizeof(char));
                         strcpy(rArgs, optarg);
                         char * ptr;
                         char * fToRead = strtok_r(rArgs,",",&ptr);
@@ -291,7 +291,7 @@ int main (int argc, char ** argv){
             case 'l': {
                 if (connOpen) {
                     if (optarg!=NULL) {
-                        char * args = calloc(strlen(optarg),sizeof(char));
+                        char * args = calloc(strlen(optarg)+1,sizeof(char));
                         char * saveptr;
                         strcpy(args, optarg);
                         char * currArg = strtok_r(args, ",", &saveptr);
@@ -310,7 +310,7 @@ int main (int argc, char ** argv){
             case 'u': {
                 if (connOpen) {
                     if (optarg!=NULL) {
-                        char * args = calloc(strlen(optarg),sizeof(char));
+                        char * args = calloc(strlen(optarg)+1,sizeof(char));
                         char * saveptr;
                         strcpy(args, optarg);
                         char * currArg = strtok_r(args, ",", &saveptr);
@@ -338,7 +338,6 @@ int main (int argc, char ** argv){
         exit(EXIT_FAILURE);
     }
     return 0;
-
 }
 
 
@@ -390,7 +389,7 @@ void printWarning(int warno) {
 
 void errEx () {
 
-    perror("Error:");
+    perror("Error");
     exit(EXIT_FAILURE);
 }
 

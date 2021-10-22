@@ -1,18 +1,22 @@
 #!/bin/bash
 
 #Salvo PID del server
-serverPID=$(pgrep server)
+serverPID=$(pgrep -f main.out)
+echo "Server PID $serverPID"
 
-#Primo client testa -W, -d, -r
-./client.out -f server -D ./Expelled -w ./Write  &
+#Primo client scrive 5 file
+./client.out -p -f server -D ./Expelled -w ./Write
 client1PID=$!
-#Secondo client testa -w, -c, -R
-./client.out -f server -d ./Read -W ./Write/w1,./Write/w2,./Write/w3,./Write/w4,./Write/w5 -r ./Write/w1,./Write/w2,./Write/w3,./Write/w4,./Write/w5 &
+
+#Secondo client scrive 8 file
+./client.out -p -f server -D ./Expelled_2nd -w ./Write_2nd
 client2PID=$!
 
 #Aspetto terminino i client
-wait $client1PID
-wait $client2PID
+wait $client1PID;
+wait $client2PID;
+
+echo "FINISHED CLIENTS"
 
 #Termino server con SIGHUP
 kill -1 $serverPID

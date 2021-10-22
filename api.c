@@ -158,44 +158,81 @@ int openFile (const char* pathname, int flags){
                 if (writeAndRead(buffer, &buffRead, nToWrite-1, MAX_BUF_SIZE)==-1) FREE_RET;
                 res = getAnswer(&buffRead,MAX_BUF_SIZE,PUC);
 
-                // Se il server mi risponde con l'espulsione di un file
-                if (res==EXPEL) {
-                    if (getExpelledFile() == -1) FREE_RET
+                // Se il server ha necessità di espellere file prima di crearne uno
+                while (res==EXPEL || res==WAIT) {
+
+                    //Se devo ricevere file espulso
+                    if (res==EXPEL && getExpelledFile()==-1) FREE_RET
+                    //Se non ho i permessi per riceverlo
+                    if (res==WAIT && sendAnswer(clientSFD,SUCCESS)==-1) FREE_RET
+
+                    // Leggo risposta successiva
+                    memset(toFree,0,MAX_BUF_SIZE);
+                    buffRead=toFree;
+                    size_t nToRead = MAX_BUF_SIZE;
+                    ssize_t nRead = 1;
+                    ssize_t totBytesRead = 0;
+                    while (nToRead > 0 && nRead!=0) {
+                        if (totBytesRead!=0 && bufferCheck(buffRead)==1) break;
+                        if ((nRead = read(clientSFD,buffRead+totBytesRead,nToRead)==-1)) {
+                            free(toFreeWrite);
+                            free(toFree);
+                            PROP(PUC,pathname,-1,0)
+                            return -1;
+                        }
+                        totBytesRead += nRead;
+                        nToRead -= nRead;
+                    }
+
+                    // Rimango nel loop finchè il server deve espellere file
+                    char tok [48];
+                    strcpy(tok,buffRead);
+                    res = atoi(strtok(tok,EOBUFF));
                 }
-                // Se non ho i permessi per ricevere il file espulso
-                if (res==WAIT) {
-                    if (sendAnswer(clientSFD,SUCCESS)==-1) FREE_RET
-                }                     
                 break;
-
-
-            /* apro un file locked
-            case O_LOCK:
-                buffer = calloc((strlen(PUB_CREATE)+strlen(pathname)),sizeof(char));
-                strcpy (buffer, "op,fl,");
-                strcat (buffer,pathname);
-                if (write(clientSFD, &buffer, sizeof(buffer))==-1) {
-                    FREE_RET;
-                }
-                break; */
 
             // creo un file locked
             case O_CREATE | O_LOCK :
-                nToWrite = sizeof(char)*(strlen(PRIV_CREATE)+strlen(pathname));
-                buffer = malloc(nToWrite+1);
+                nToWrite = sizeof(char)*(strlen(PRIV_CREATE)+fNameLen) + 1;  //buffer da inviare a server
+                buffer = malloc(nToWrite);
+                memset (buffer, 0, nToWrite);
+                toFreeWrite = buffer;
                 strcpy (buffer, PRIV_CREATE);
                 strcat (buffer,pathname);
+
                 if (writeAndRead(buffer,&buffRead, nToWrite, MAX_BUF_SIZE)==-1) FREE_RET;
                 res = getAnswer(&buffRead,MAX_BUF_SIZE,PRC);
 
-                // Se il server mi risponde con l'espulsione di un file
-                if (res==EXPEL) {
-                    if (getExpelledFile() == -1) FREE_RET
+                while (res==EXPEL || res==WAIT) {
+
+                    //Se devo ricevere file espulso
+                    if (res==EXPEL && getExpelledFile()==-1) FREE_RET
+                    //Se non ho i permessi per riceverlo
+                    if (res==WAIT && sendAnswer(clientSFD,SUCCESS)==-1) FREE_RET
+
+                    // Leggo risposta successiva
+                    memset(toFree,0,MAX_BUF_SIZE);
+                    buffRead=toFree;
+                    size_t nToRead = MAX_BUF_SIZE;
+                    ssize_t nRead = 1;
+                    ssize_t totBytesRead = 0;
+                    while (nToRead > 0 && nRead!=0) {
+                        if (totBytesRead!=0 && bufferCheck(buffRead)==1) break;
+                        if ((nRead = read(clientSFD,buffRead+totBytesRead,nToRead)==-1)) {
+                            free(toFreeWrite);
+                            free(toFree);
+                            PROP(PUC,pathname,-1,0)
+                            return -1;
+                        }
+                        totBytesRead += nRead;
+                        nToRead -= nRead;
+                    }
+
+                    // Rimango nel loop finchè il server deve espellere file
+                    char tok [48];
+                    strcpy(tok,buffRead);
+                    res = atoi(strtok(tok,EOBUFF));
                 }
-                // Se non ho i permessi per ricevere il file espulso
-                if (res==WAIT) {
-                    if (sendAnswer(clientSFD,SUCCESS)==-1) FREE_RET
-                }                     
                 break;
 
             default:
@@ -215,13 +252,16 @@ int openFile (const char* pathname, int flags){
         if (writeAndRead(buffer,&buffRead, nToWrite-1, MAX_BUF_SIZE)==-1) FREE_RET;
     }
 
-    int answer = getAnswer(&buffRead, MAX_BUF_SIZE, OP);
+    int answer;
+    if (flags==0) answer = getAnswer(&buffRead, MAX_BUF_SIZE, OP);
+    else answer = res;
     free (toFreeWrite);
     free (toFree);
 
+    // si è provato a creare un file già esistente
     if(answer == FAILURE && flags==O_CREATE) {
         errno = EEXIST;
-        PROP(OP,pathname,-1,0)
+        PROP(PUC,pathname,-1,0)
         return -1;
     }
 
@@ -236,7 +276,9 @@ int openFile (const char* pathname, int flags){
     openFiles=addString(pathname, openFiles);
 
     //Se le stampe sono abilitate stampo l'esito
-    PROP(OP,pathname,answer,0)
+    if (flags==O_CREATE) PROP(PUC,pathname,answer,0)
+    if (flags==(O_CREATE|O_LOCK)) PROP(PRC,pathname,answer,0)
+    if (flags==0) PROP(OP,pathname,answer,0)
     return answer;
 }
 
@@ -383,8 +425,8 @@ int readNFiles (int N, const char* dirname) {
         if (getHeader_File(&content,&pathname,&size,RDM)==-1) return -1;
 
         // Ricavo il nome per salvare eventualmente il file
-        char * saveName = calloc  (MAX_NAME_LEN, sizeof(char));
-        if (nameFromPath(pathname,&saveName)==-1) {
+        char * saveName = calloc (MAX_NAME_LEN, sizeof(char));
+        if (nameFromPath(pathname,saveName)==-1) {
             free (saveName);
             free (content);
             return -1;
@@ -430,12 +472,15 @@ int writeFile (const char* pathname, const char* dirname){
     }
 
     // Richiesta apertura file al server
-    int res = openFile(pathname, 0);        // res è -1 ma errno è 104 dopo
+    int res = openFile(pathname, 0);
 
     if (res == -1) {
         if (errno==ENOENT) { 
             //Se il file non è già presente, lo creo
-            res = openFile(pathname, O_CREATE);
+            if ((res = openFile(pathname, O_CREATE))==-1) {
+                fclose(fToWrite);
+                return -1;
+            }
         }
         else {
             // Se il file è presente non lo sovrascrivo
@@ -711,7 +756,6 @@ ssize_t writeAndRead (void * bufferToWrite, void ** bufferToRead, size_t bufferS
         }
     write(clientSFD,EOBUFF,EOB_SIZE);
 
-
     // Aspetto il tempo di risposta
     sleep(msec * 0.001);
 
@@ -732,25 +776,28 @@ ssize_t writeAndRead (void * bufferToWrite, void ** bufferToRead, size_t bufferS
 int saveFile (void * buffer, const char * dirName, const char * pathname, size_t size) {
 
     // Estraggo solo il nome da un eventuale percorso con cui è stato nominato dal server
-    printf ("Salvo file: %s\n",pathname);                   // TEST
-    char * tm = calloc (strlen(pathname)+1, sizeof(char));
-    strcpy (tm, pathname);
-    nameFromPath (tm, &tm);
+    char tm [MAX_NAME_LEN];
+    memset(tm,0,MAX_NAME_LEN);
+    if (nameFromPath (pathname, tm)==-1) return -1;
 
     // Salvo il path ./directory/filename
-    char * fpath = calloc (strlen(dirName)+strlen("/")+strlen(tm)+1, sizeof(char));
+    char fpath [MAX_NAME_LEN];
+    memset(fpath,0,MAX_NAME_LEN);
     strcpy(fpath, dirName);
     strcat(fpath,"/");
     strcat(fpath,tm);
 
     // Salvo il file aprendolo in creazione
     FILE * f;
-    if ((f = fopen(fpath, "w+"))==NULL) return -1;
+    if ((f = fopen(fpath,"w+"))==NULL) return -1;
 
     // Copio il contenuto del buffer
-    fwrite(buffer, sizeof(char), size, f);
-    free (fpath);
-    free (tm);
+    if (fwrite(buffer,1,size,f)<size) {
+        fclose(f);
+        return -1;
+    }
+    
+    fflush(f);
     if (fclose(f) == 0) return 0;
     return -1;
 
@@ -758,7 +805,7 @@ int saveFile (void * buffer, const char * dirName, const char * pathname, size_t
 
 ssize_t getAnswer(void ** buffer, size_t size, int query) {
     char * string = calloc(size, sizeof(char));
-    memcpy(string, (char*)buffer, sizeof(char)*size);
+    memcpy(string, buffer, sizeof(char)*size);
 
     char * toTok;
     toTok = strtok(string,EOBUFF);
@@ -782,6 +829,10 @@ void printOpRes (int op, const char * fname, int res, size_t bytes) {
 
     case OP:
         printf ("Eseguita apertura del file %s con risultato %d\n",fname,res);
+        break;
+
+    case PUC:
+        printf ("Eseguita creazione del file %s con risultato %d\n",fname,res);
         break;
 
     case CF:
@@ -813,7 +864,7 @@ int getHeader_File (void ** content, void ** pathname, size_t * size, int op){
 
         char * tk; // token tmp
         size_t fileSize; // taglia del file
-        char pathName[MAX_NAME_LEN];  // nome file
+        char * pathName = calloc(MAX_NAME_LEN,sizeof(char));  // nome file
 
         // Leggo header sul file e ne faccio una copia
         ssize_t nToRd = MAX_BUF_SIZE;
@@ -841,20 +892,23 @@ int getHeader_File (void ** content, void ** pathname, size_t * size, int op){
         fileSize = atol(tk);
 
         // Salvo eventuale contenuto che possa essere finito nel buffer dell'header
-        void * file = malloc (fileSize);
+        void * file = malloc (fileSize+EOB_SIZE);
+        void * fileStart = file;
         memset (file, 0, fileSize);
         void * freePtr = file;
-        nToRd = fileSize + EOB_SIZE; 
+        if (op!=RD || op!=EXF) nToRd = fileSize+EOB_SIZE; 
+        else nToRd=fileSize+1;
 
         if ((tk=strtok(NULL,EOBUFF))!=NULL) {
             memcpy(file,tk,sizeof(char)*strlen(tk));
-            nToRd-=sizeof(char)*strlen(tk);
+            nToRd-=sizeof(char)*strlen(tk)+EOB_SIZE;
         }
 
-        // Segnalo al server di procedere con l'invio del contenuto del file
         nRead = 1;
         totBytes = 0;
+        // Se l'operazione è una Read Multipla invio l'ok per ricever il contenuto
         if (op == RDM) sendAnswer(clientSFD,SUCCESS);
+        // Leggo il restante contenuto se presente
         while (nToRd>0 && nRead!=0) {
             if (totBytes!=0 && bufferCheck(file)!=0) break;
             if ((nRead=read(clientSFD,file+totBytes,nToRd))==-1) {
@@ -867,7 +921,7 @@ int getHeader_File (void ** content, void ** pathname, size_t * size, int op){
         }
         free(toFree);
         * pathname = pathName;
-        * content = file;
+        * content = fileStart;
         * size = fileSize;
         return 0;
 }
@@ -882,21 +936,10 @@ int getExpelledFile () {
     // Leggo il file preceduto da un header
     if (getHeader_File(&content,&pathname,&size,PUC)==-1) return -1;
 
-    // Ricavo il nome per salvare eventualmente il file
-    char * saveName = calloc  (MAX_NAME_LEN, sizeof(char));
-    if (nameFromPath(pathname,&saveName)==-1) {
-        free (saveName);
-        free (content);
-        return -1;
-    }
-    int res = 0;
-
     // Se ho specificato una cartella per i file espulsi salvo il file
-    if (expelledFiles!=NULL) {res = saveFile(content,expelledFiles,saveName,size);}
-    if (res==-1) {
-        free (saveName);
-        free(content);
-        return -1;
-    }
-    return 0;
+    int res = 0;
+    if (expelledFiles!=NULL) {res = saveFile(content,expelledFiles,pathname,size);}
+    free (pathname);
+    free(content);
+    return res;
 }

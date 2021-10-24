@@ -1,8 +1,5 @@
 #!/bin/bash
 
-#Salvo PID del server
-serverPID=$(pgrep -f main.out)
-
 #Primo client testa -W, -d, -r
 ./client.out -p -t 200 -f server -W ./WriteFile/w1,./WriteFile/w2 -d ./ReadFile -r ./WriteFile/w1,./WriteFile/w2 &
 client1PID=$!
@@ -19,4 +16,4 @@ wait $client2PID
 wait $client3PID
 
 #Termino server con SIGHUP
-kill -1 $serverPID
+pkill -1 -f main.out

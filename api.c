@@ -190,6 +190,9 @@ int openFile (const char* pathname, int flags){
                     res = atoi(strtok(tok,EOBUFF));
                 }
                 break;
+            
+            case O_LOCK:
+                break;
 
             // creo un file locked
             case O_CREATE | O_LOCK :
@@ -241,7 +244,7 @@ int openFile (const char* pathname, int flags){
         }
     }
 
-    // apro un file
+    // apro un file unlocked
     else {
         nToWrite = sizeof(char) * (strlen(OPEN)+strlen(pathname)) + 1;
         buffer = malloc(nToWrite);
@@ -401,7 +404,7 @@ int readNFiles (int N, const char* dirname) {
         return -1;
     }
     N = getAnswer(&buff,MAX_BUF_SIZE,RDM);
-    printf("Available files: %d\n",N);
+    //printf("Available files: %d\n",N);  //TEST
     free (tmp);
     free(toFreeWrite);
 
@@ -851,6 +854,10 @@ void printOpRes (int op, const char * fname, int res, size_t bytes) {
         printf ("Eseguito rilascio del file %s con risultato %d\n",fname,res);
         break;
 
+    case EXF:
+        printf("Ricevuta espulsione di %li bytes del file %s con risultato %d\n",bytes,fname,res);
+        break;
+
     default:
         break;
     }
@@ -939,6 +946,7 @@ int getExpelledFile () {
     // Se ho specificato una cartella per i file espulsi salvo il file
     int res = 0;
     if (expelledFiles!=NULL) {res = saveFile(content,expelledFiles,pathname,size);}
+    PROP(EXF,pathname,res,size)
     free (pathname);
     free(content);
     return res;

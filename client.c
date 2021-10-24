@@ -326,7 +326,7 @@ int main (int argc, char ** argv){
             }
 
 
-            default: 
+            default:
                 printWarning(INVALID_OPT);
                 break;
         }
@@ -478,7 +478,6 @@ int navigateDir(char * dirName, int n, int j) {
             strcpy(fileName, dirName);
             strcat(fileName, "/");
             strcat(fileName,currentName);
-            printf("%s\n",fileName);
             if (stat(fileName,dirStreamInfo)==-1) {
                 free(ptr);
                 free(dirStreamInfo);

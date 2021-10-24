@@ -297,6 +297,7 @@ void startServer () {
 
     // Se arriva segnale SIGINT o SIGQUIT chiudo immediatamente il server
     if (sigiq) {
+        printf("SIGIQ\n");  //TEST
         connectionFDS[0].fd = -1;
         cleanup(workers, signalHandler, wsFailed, socketsList);;
         free (connectionFDS);
@@ -420,6 +421,7 @@ void * manageRequest() {
 
         // Disabilito cancellazione mentre servo richiesta per non lasciare garbage nell'ambiente
         if (pthread_setcancelstate(PTHREAD_CANCEL_DISABLE,NULL)!=0) pthread_exit(NULL);
+        printf("Managing %d for %d\n",code,currentRequest); //TEST
 
         switch (code) {
 
@@ -730,7 +732,7 @@ void * manageRequest() {
             // Creazione di un file locked //
             case PRC: {
                 pthread_mutex_lock(&mutex);
-                printf ("Capacity: %d/%d\n",fileCount,storageDim);
+                //printf ("Capacity: %d/%d\n",fileCount,storageDim);    //TEST
                 int res = 0;
 
                 // Se sono a capacità massima avverto il client dell'espulsione di un file e aspetto feedback
@@ -761,7 +763,7 @@ void * manageRequest() {
                             lastAddedFile->next = newFile (NULL, 0, reqArg, currentRequest, &lastAddedFile);
                             lastAddedFile = lastAddedFile->next;
                             fileCount++;
-                            printf("Last file: %s\n",lastAddedFile->fileName);
+                            //printf("Last file: %s\n",lastAddedFile->fileName);  //TEST
                             END_REQ(PRC)
                         }
                         else {

@@ -22,7 +22,12 @@ int nameFromPath (char * fullpath, char * name) {
     char * dirless;
     char * ptr=NULL;
     char * tmp;
-    dirless = strtok_r (fullpath,"/", &ptr);
+    //Copio fullpath per strtok_r
+    char toTok [strlen(fullpath)+1];
+    memset(toTok,0,strlen(fullpath)+1);
+    strcpy(toTok,fullpath);
+    //Ricavo il nome del file dal path completo
+    dirless = strtok_r (toTok,"/", &ptr);
     while ((tmp=strtok_r(NULL,"/", &ptr))!=NULL) {
         dirless=tmp;
     }

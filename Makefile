@@ -60,6 +60,11 @@ test2:
 	mv ./main.out ./client.out Test2
 	cd ./Test2; ./main.out & ./test2.sh
 
+test3:
+	make all
+	mv ./main.out ./client.out Test3
+	cd ./Test3; ./main.out & ./test3.sh
+
 cleantest1:
 	make cleanall
 	rm ./Test1/log.txt ./Test1/server ./Test1/client.out ./Test1/main.out
@@ -71,10 +76,14 @@ cleantest2:
 	rm ./Test2/Expelled_2nd/*
 	rm ./Test2/Expelled/*
 
+cleantest3:
+	make cleanall
+	rm ./Test3/log.txt ./Test3/server ./Test3/client.out ./Test3/main.out
+	rm ./Read/*
+
 cleantestAll:
+	make cleanall
 	rm ./Test1/log.txt ./Test1/server ./Test1/client.out ./Test1/main.out
 	rm ./Test1/ReadFile/*
 	rm ./Test2/log.txt ./Test2/server ./Test2/client.out ./Test2/main.out
 	rm ./Test2/Read/*
-	make cleanall
-

@@ -18,8 +18,11 @@ node * popNode(node * List){
     return List;
 }
 
-void deleteNode (int fd, node ** list){
-    if  ((*list)->descriptor==fd) *list=popNode(*list);
+void deleteNode (int fd, node ** list, node ** tail){
+    if  ((*list)->descriptor==fd) {
+        *list=popNode(*list);
+        if (*list==NULL) *tail=*list;
+        }
     else {
         node * previous = NULL;
         node * current = *list;
@@ -29,6 +32,7 @@ void deleteNode (int fd, node ** list){
         }
         if (current!=NULL && current->descriptor==fd) {
             previous->next=current->next;
+            if(previous->next==NULL) *tail=previous;
             free (current);
         }
     }

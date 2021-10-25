@@ -40,9 +40,10 @@ node * addNode (int desc);
 */
 node * popNode(node * List);
 
-/* Elimina dalla lista il nodo contenente fd.
+/* Elimina dalla lista il nodo contenente fd; a fine funzione tail
+    punterà alla nuova coda della lista.
 */
-void deleteNode (int fd, node ** list);
+void deleteNode (int fd, node ** list, node ** tail);
 
 /* Aggiunge un nodo puntante a file f di nome fname in coda ad una lista di elementi fileNode
 */

@@ -220,11 +220,11 @@ void startServer () {
     while(!sigiq) {
 
         //Controllo se ci sono richieste
-        if ((pollRes = poll(connectionFDS,maxFd,30))==-1)
+        if ((pollRes = poll(connectionFDS,maxFd,300))==-1)
             errEx();
         //Se è scaduto il timeout senza nessun client connesso al momento
         if (pollRes == 0) {
-            //printf("Server refresh\n");
+            //printf("Server refresh\n");   //TEST
         }
 
         //Controllo se devo rimettermi in ascolto di fd
@@ -268,7 +268,8 @@ void startServer () {
             if (connectionFDS[i].fd!=-1 && (connectionFDS[i].revents==POLLHUP)) {
                 int toClose = connectionFDS[i].fd;
                 connectionFDS[i].fd = -1;
-                close(toClose);                
+                close(toClose);
+                deleteNode(toClose,&socketsList,&currSock);            
                 pthread_mutex_lock(&mutex);
                 logOperation(CC, toClose, 0, NULL);
                 //printf("CLOSE %d %d\n",toClose,connectionFDS[i].fd);   //TEST
@@ -333,7 +334,8 @@ void cleanup(pthread_t workers[], pthread_t * sigHandler, int index, node * sock
 
     // Chiusura dei socket
     while (socket_list != NULL) {
-        if (close(socket_list->descriptor)!=0) errEx();
+        if (close(socket_list->descriptor)!=0)
+            errEx();
         socket_list = popNode(socket_list);
     }
 
@@ -380,7 +382,7 @@ void * manageRequest() {
 
         pthread_mutex_lock(&queueAccess);
         // Prelevo fd da servire dalla queue
-        if (requestsQueue==NULL ) {
+        while (requestsQueue==NULL ) {
             pthread_cond_wait(&newReq,&queueAccess);
         }
         currentRequest = requestsQueue->descriptor;
@@ -418,10 +420,11 @@ void * manageRequest() {
         if (tmp!=NULL) code = atoi(tmp);
 
         char * reqArg;
+        printf("Managing %d for %d\n",code,currentRequest);
 
         // Disabilito cancellazione mentre servo richiesta per non lasciare garbage nell'ambiente
         if (pthread_setcancelstate(PTHREAD_CANCEL_DISABLE,NULL)!=0) pthread_exit(NULL);
-        printf("Managing %d for %d\n",code,currentRequest); //TEST
+        //printf("Managing %d for %d\n",code,currentRequest); //TEST
 
         switch (code) {
 
@@ -837,7 +840,7 @@ void * manageRequest() {
 
                             // Ogni volta che viene rilasciato un file sono notificato e controllo se è quello richiesto
                             while (!released) {
-                                if (pthread_cond_timedwait(&fileUnlocked,&mutex,&timeout)==-1) break;
+                                while (pthread_cond_timedwait(&fileUnlocked,&mutex,&timeout)==-1) break;
                                 if ((res = searchFile (pathname, storage, &fToLc))==-1) break;
                                 // Se è stato rilasciato acquisisco lock
                                 if (fToLc->owner==0) {
@@ -1007,7 +1010,7 @@ void * handle (){
 void writeListenFd (int fd) {
     
     pthread_mutex_lock(&mtx);
-    if (toListen!=-1) pthread_cond_wait(&toListenFree,&mtx);
+    while (toListen!=-1) pthread_cond_wait(&toListenFree,&mtx);
     toListen=fd;
     //printf("WRITING TO LISTEN %d\n",fd);    //TEST
     pthread_mutex_unlock(&mtx);

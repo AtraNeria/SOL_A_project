@@ -9,7 +9,7 @@
 #define EXF 7           // Espulsione file
 
 // Codici richieste
-#define CF 8
+#define OPL 8
 #define RD 16
 #define WR 32
 #define OP 64
@@ -20,8 +20,10 @@
 #define PRC 2048
 #define LCK 4096
 #define ULC 8192
+#define CF 9084
 
 // Codici richieste come stringhe
+#define OP_LOCK "8,"        // Apertura in stato locked
 #define READ "16,"          // Lettura
 #define WRITE "32,"         // Scrittura
 #define OPEN "64,"          // Apertura
@@ -31,7 +33,7 @@
 #define RD_MUL "1024,"      // Lettura di molteplici file
 #define PRIV_CREATE "2048," // Creazione locked
 #define LOCK_F "4096,"      // Lock
-#define UNLOCK "8192,"     // Unlock 
+#define UNLOCK "8192,"      // Unlock 
 
 #define TEST printf("OK\n");
 #define EOBUFF "£"

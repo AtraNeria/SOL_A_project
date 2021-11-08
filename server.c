@@ -220,7 +220,7 @@ void startServer () {
     while(!sigiq) {
 
         //Controllo se ci sono richieste
-        if ((pollRes = poll(connectionFDS,maxFd,300))==-1)
+        if ((pollRes = poll(connectionFDS,maxFd,30))==-1)
             errEx();
         //Se è scaduto il timeout senza nessun client connesso al momento
         if (pollRes == 0) {
@@ -404,6 +404,7 @@ void * manageRequest() {
             tr-=reqRes;
         }
         //pthread_mutex_unlock(&mutex);
+        //printf("%s\n",(char*)buffer);   //TEST
 
         // Creo una copia del buffer per tokenizzare
         char * tk = calloc(MAX_BUF_SIZE, sizeof(char));
@@ -420,11 +421,12 @@ void * manageRequest() {
         if (tmp!=NULL) code = atoi(tmp);
 
         char * reqArg;
-        printf("Managing %d for %d\n",code,currentRequest);
+        //printf("Managing %d for %d\n",code,currentRequest); //TEST
 
         // Disabilito cancellazione mentre servo richiesta per non lasciare garbage nell'ambiente
         if (pthread_setcancelstate(PTHREAD_CANCEL_DISABLE,NULL)!=0) pthread_exit(NULL);
-        //printf("Managing %d for %d\n",code,currentRequest); //TEST
+        printf("Managing %d for %d\n",code,currentRequest); //TEST
+        printf("Request %s\n",(char*)buffer);   //TEST
 
         switch (code) {
 
@@ -450,15 +452,15 @@ void * manageRequest() {
                     }
                     // Invio la taglia
                     if ((res=sendAnswer(currentRequest,fToRd->fileSize))==-1) {END_NOANSW(RD)}
+
                     // Aspetto conferma e invio il contenuto
                     if ((res=waitForAck(currentRequest))==-1 || (res=sendFile(currentRequest,fToRd,RD))==-1) {END_NOANSW(RD)}
                     else {END_NOANSW(RD)}
                     pthread_mutex_unlock(&mutex);
                 }
-
                 break;
             }
-                
+                            
             // Richiesta di scrittura //
             case WR: {
                 int res = 0;
@@ -580,6 +582,35 @@ void * manageRequest() {
                     }
                     END_REQ(OP) 
                 }
+                pthread_mutex_unlock(&mutex);
+                break;
+            }
+
+            // Apertura di un file in stato locked
+            case OPL: {
+                int res = 0;
+                reqArg = strtok_r(NULL, EOBUFF, &ptr);
+
+                pthread_mutex_lock(&mutex);
+                if (reqArg == NULL)  res = -1;
+                else {
+                    // Controllo l'esistenza del file
+                    fileNode * fToOp;
+                    if (searchFile(reqArg, storage,&fToOp)==-1) {
+                         // L'operazione fallisce se il file non è presente
+                         res = -1;
+                    }
+                    else {
+                        // Se esiste, controllo chi detiene la lock del file
+                        int currOwner=checkLock(reqArg, storage);
+
+                        // Se è unlocked il client lo acquisce
+                        if (currOwner==0) fToOp->owner=currentRequest;
+                        //Se è acquisito da un altro client l'operazione ha esito negativo
+                        if (currOwner!=currentRequest) res = -1;
+                    }
+                }
+                END_REQ(OPL)
                 pthread_mutex_unlock(&mutex);
                 break;
             }
@@ -735,47 +766,47 @@ void * manageRequest() {
             // Creazione di un file locked //
             case PRC: {
                 pthread_mutex_lock(&mutex);
-                //printf ("Capacity: %d/%d\n",fileCount,storageDim);    //TEST
+                //printf ("Capacity: %d/%d\n",fileCount,storageDim);  //TEST
                 int res = 0;
-
-                // Se sono a capacità massima avverto il client dell'espulsione di un file e aspetto feedback
-                if (fileCount == storageDim) {
-                    if (expelFile(currentRequest,storage)==-1) {
-                        res = -1;
-                        END_NOLISTEN(PRC)
-                    }
-                }
                 // Ricavo nome file
                 reqArg = strtok_r (NULL, EOBUFF, &ptr);
+                // Se ho fallito a ricavare il nome
                 if (reqArg == NULL) {
                     res = -1;
                     END_REQ(PRC)
+                    goto endCreateLock;
+                }
+
+                // Se sono a capacità massima avverto il client dell'espulsione di un file e aspetto feedback
+                while (fileCount >= storageDim) {
+                    if (expelFile(currentRequest,storage)==-1) {
+                        res = -1;
+                        END_NOLISTEN(PRC)
+                        goto endCreateLock;
+                    }
                 }
 
                 // Se è il primo file nello storage lo inizializzo
+                if (storage == NULL) {
+                    storage = initStorage (NULL, reqArg, currentRequest);
+                    fileCount++;
+                }
                 else {
-                    if (storage == NULL) {
-                        storage = initStorage (NULL, reqArg, currentRequest);
+                    // Se non è il primo file lo aggiungo
+                    fileNode * toCr;
+                    if (searchFile(reqArg,storage,&toCr) == -1) {
+                        lastAddedFile->next = newFile (NULL, 0, reqArg, currentRequest, &lastAddedFile);
+                        lastAddedFile = lastAddedFile->next;
                         fileCount++;
-                        END_REQ(PRC)
+                        //printf("Last file: %s\n",lastAddedFile->fileName);  //TEST
                     }
                     else {
-                        // Se non è il primo file lo aggiungo
-                        fileNode * toCr;
-                        if (searchFile(reqArg,storage,&toCr) == -1) {
-                            lastAddedFile->next = newFile (NULL, 0, reqArg, currentRequest, &lastAddedFile);
-                            lastAddedFile = lastAddedFile->next;
-                            fileCount++;
-                            //printf("Last file: %s\n",lastAddedFile->fileName);  //TEST
-                            END_REQ(PRC)
-                        }
-                        else {
-                            res = -1;
-                            END_REQ(PRC);
-                        }
+                        res = -1;
                     }
-                    pthread_mutex_unlock(&mutex);
                 }
+                END_REQ(PRC);
+                endCreateLock:
+                pthread_mutex_unlock(&mutex);
                 break;
             }
 
@@ -904,7 +935,7 @@ int sendFile (int fd, fileNode * f, int op) {
         writeSize -= nWritten;
         totBytesWritten += nWritten;
     }
-    if(op!=RD || op!=EXF) write(fd, EOBUFF, EOB_SIZE);
+    if (op!=RD && op!=EXF) {write(fd, EOBUFF, EOB_SIZE);}
     free (toFree);
     return 0; 
 }
@@ -930,8 +961,8 @@ void logOperation (int op, int process, int res, char * file) {
                 fprintf (logging,"Open, file %s, fd %d, result %d\n",file,process,res);
                 break;
 
-            case CF:
-                fprintf (logging,"Close, file %s, fd %d, result %d\n",file,process,res);
+            case OPL:
+                fprintf (logging,"Open-lock, file %s, fd %d, result %d\n",file,process,res);
                 break;
 
             case RM:

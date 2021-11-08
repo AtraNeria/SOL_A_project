@@ -16,7 +16,6 @@
 #define O_CREATE 01
 #define O_LOCK 10
 
-#define SET_LO if (lastOperation==1) lastOperation=0
 #define FREE_RET \
     {free(toFreeWrite); free(toFree); return -1;}
 #define PROP(op,file,res,byte) if (pOpt_met) {printOpRes(op,file,res,byte);}
@@ -27,10 +26,7 @@ extern int msec;
 extern char * expelledFiles;
 extern char * dirReadFiles;
 int clientSFD;
-/* Viene settata a 1 quando una open viene fatta con successo e
-  rimessa a 0 all'operazione successiva; usata per check nella 
-  funzione writeFile */
-int lastOperation = 0;
+
 
 // Lista in cui segno i file correntemente aperti dal client
 strNode * openFiles = NULL;
@@ -61,6 +57,13 @@ int getExpelledFile ();
     Restituisce -1 in caso di fallimento settando errno, 0 in caso di successo
 */
 int saveFile (void * buffer, const char * dirName, const char * pathname, size_t size);
+
+/* Controlla se il file pathname è aperto e disponibile per ulteriori operazioni.
+    In caso non sia aperto tenta di aprirlo.
+    Restituisce 0 se il file è aperto correttamente, -1 se l'operazione fallisce o
+    il file era stato chiuso in precedenza.
+*/
+int checkOpen (const char * pathname);
 
 /* Legge size bytes di buffer e restituisce la risposta contenutavi alla richiesta query.
 */
@@ -146,7 +149,7 @@ int openFile (const char* pathname, int flags){
         switch (flags){
 
             // creo un file
-            case O_CREATE:
+            case O_CREATE:{
 
                 nToWrite = sizeof(char)*(strlen(PUB_CREATE)+fNameLen) + 1;  //buffer da inviare a server
                 buffer = malloc(nToWrite);
@@ -190,19 +193,31 @@ int openFile (const char* pathname, int flags){
                     res = atoi(strtok(tok,EOBUFF));
                 }
                 break;
-            
-            case O_LOCK:
+            }
+
+            // apro file in stato locked
+            case O_LOCK:{
+
+                nToWrite = sizeof(char) * (strlen(OP_LOCK)+strlen(pathname)) + 1;
+                buffer = malloc(nToWrite);
+                memset (buffRead, 0, nToWrite);
+                toFreeWrite = buffer;
+                strcpy (buffer, OP_LOCK);
+                strcat (buffer,pathname);
+                if (writeAndRead(buffer,&buffRead, nToWrite-1, MAX_BUF_SIZE)==-1) FREE_RET;
                 break;
+            }
 
             // creo un file locked
-            case O_CREATE | O_LOCK :
-                nToWrite = sizeof(char)*(strlen(PRIV_CREATE)+fNameLen) + 1;  //buffer da inviare a server
+            case (O_CREATE|O_LOCK):{
+
+                //buffer da inviare a server
+                nToWrite = sizeof(char)*(strlen(PRIV_CREATE)+fNameLen);
                 buffer = malloc(nToWrite);
                 memset (buffer, 0, nToWrite);
                 toFreeWrite = buffer;
                 strcpy (buffer, PRIV_CREATE);
                 strcat (buffer,pathname);
-
                 if (writeAndRead(buffer,&buffRead, nToWrite, MAX_BUF_SIZE)==-1) FREE_RET;
                 res = getAnswer(&buffRead,MAX_BUF_SIZE,PRC);
 
@@ -224,7 +239,7 @@ int openFile (const char* pathname, int flags){
                         if ((nRead = read(clientSFD,buffRead+totBytesRead,nToRead)==-1)) {
                             free(toFreeWrite);
                             free(toFree);
-                            PROP(PUC,pathname,-1,0)
+                            PROP(PRC,pathname,-1,0)
                             return -1;
                         }
                         totBytesRead += nRead;
@@ -237,6 +252,7 @@ int openFile (const char* pathname, int flags){
                     res = atoi(strtok(tok,EOBUFF));
                 }
                 break;
+            }
 
             default:
                 fprintf(stderr,"Flags non valide\n");
@@ -256,30 +272,24 @@ int openFile (const char* pathname, int flags){
     }
 
     int answer;
-    if (flags==0) answer = getAnswer(&buffRead, MAX_BUF_SIZE, OP);
+    if (flags==0 || flags==O_LOCK) answer = getAnswer(&buffRead, MAX_BUF_SIZE, OP);
     else answer = res;
     free (toFreeWrite);
     free (toFree);
 
     // si è provato a creare un file già esistente
-    if(answer == FAILURE && flags==O_CREATE) {
-        errno = EEXIST;
-        PROP(PUC,pathname,-1,0)
-        return -1;
-    }
+    if(answer == FAILURE && flags==O_CREATE) errno = EEXIST;
 
     // si è provato ad aprire file non esistente
-    if(answer == FAILURE && flags==0){
-        errno = ENOENT;
-        PROP(OP,pathname,-1,0)
-        return -1;
+    if(answer == FAILURE && (flags==0 || flags==O_LOCK)) errno = ENOENT;
+    // si è aperto un file con successo
+    if (answer==SUCCESS && searchString(pathname,openFiles)==-1) {
+        openFiles=addString(pathname, openFiles);
     }
-    
-    if (answer==SUCCESS) lastOperation = 1;
-    openFiles=addString(pathname, openFiles);
 
     //Se le stampe sono abilitate stampo l'esito
     if (flags==O_CREATE) PROP(PUC,pathname,answer,0)
+    if (flags==O_LOCK) PROP(OPL,pathname, answer,0)
     if (flags==(O_CREATE|O_LOCK)) PROP(PRC,pathname,answer,0)
     if (flags==0) PROP(OP,pathname,answer,0)
     return answer;
@@ -287,25 +297,21 @@ int openFile (const char* pathname, int flags){
 
 int readFile (const char * pathname, void ** buf, size_t* size) {
 
+    int answer = 0;
     // Controllo lunghezza nome
     int fNameLen = strlen (pathname);
     if (fNameLen>MAX_NAME_LEN) {
         errno = ENAMETOOLONG;
-        return -1;
+        answer = -1;
+        goto retRead;
     }
 
-    //Controllo se il file è già aperto
-    int fState = searchString(pathname,openFiles);
-    // Se non è presente tento di aprirlo
-    if (fState == -1) {
-        if (openFile(pathname, 0)==-1) return -1;
-    }   
-    if (fState == 0) {  // Se è stato chiuso in precedenza non posso più operare sul file
-        errno = EPERM;
-        return -1;
+    //Controllo se il file è aperto
+    if (checkOpen(pathname)==-1) {
+        answer = -1;
+        goto retRead;
     }
 
-    //Preparo richiesta al server
     size_t nToWrite = sizeof(char)*(strlen(READ)+fNameLen) + 1;
     void * buffer = malloc(nToWrite);
     memset (buffer, 0, nToWrite);
@@ -326,9 +332,10 @@ int readFile (const char * pathname, void ** buf, size_t* size) {
         return -1;
     }
     char string[MAX_BUF_SIZE];
-    strcpy (string, (char*)freeRes);
+    strcpy (string, (char*)freeRes);  
     char * tok = strtok(string,EOBUFF);
     result = atol(tok);
+
 
     if(result==-1) {
         free(toFreeWrite);
@@ -365,10 +372,11 @@ int readFile (const char * pathname, void ** buf, size_t* size) {
             free (toFreeWrite);
             free (freeRes);
             free(ptr);
-            return -1;
+            answer = -1;
+            goto retRead;
         }
     }
-
+    
     // Assegno i puntatori richiesti dal client
     * buf = ptr;
     * size = result;
@@ -376,8 +384,9 @@ int readFile (const char * pathname, void ** buf, size_t* size) {
     free (freeRes);
 
     //Se le stampe sono abilitate stampo l'esito
-    PROP(RD,pathname,0,*size)
-    return 0;
+    retRead:
+    PROP(RD,pathname,answer,*size)
+    return answer;
 }
 
 int readNFiles (int N, const char* dirname) {
@@ -459,14 +468,6 @@ int writeFile (const char* pathname, const char* dirname){
         return -1;
     }
 
-    // Controllo se posso operare sul file
-    int fileS = searchString (pathname, openFiles);
-    if (fileS == 0) {
-        errno = EPERM;
-        PROP(WR,pathname,-1,0)
-        return -1;
-    }
-
     // Apro file in locale 
     FILE * fToWrite; 
     if ((fToWrite = fopen(pathname, "r+") )== NULL) {
@@ -475,13 +476,13 @@ int writeFile (const char* pathname, const char* dirname){
     }
 
     // Richiesta apertura file al server
-    int res = openFile(pathname, 0);
-
+    int res = openFile(pathname, O_LOCK);
     if (res == -1) {
         if (errno==ENOENT) { 
             //Se il file non è già presente, lo creo
-            if ((res = openFile(pathname, O_CREATE))==-1) {
+            if ((res = openFile(pathname, O_CREATE | O_LOCK))==-1) {
                 fclose(fToWrite);
+                PROP(WR,pathname,-1,0)
                 return -1;
             }
         }
@@ -525,6 +526,7 @@ int writeFile (const char* pathname, const char* dirname){
     if (appendToFile(pathname, buffer, fileSize, expelledFiles)==-1) {
         free(buffer);
         fclose(fToWrite);
+        PROP(WR,pathname,-1,0)
         return -1;
     }
 
@@ -618,6 +620,10 @@ int appendToFile (const char* pathname, void* buf, size_t size, const char* dirn
 }
 
 int lockFile(const char* pathname){
+
+    // Controllo se posso operare sul file
+    if (checkOpen(pathname)==-1) return -1;
+
     // Controllo lunghezza nome
     int fNameLen = strlen(pathname);
     if (fNameLen > MAX_NAME_LEN) {
@@ -656,10 +662,17 @@ int lockFile(const char* pathname){
 
 int unlockFile(const char* pathname){
 
+    // Controllo se posso operare sul file
+    if (checkOpen(pathname)==-1) {
+        PROP(ULC,pathname,-1,0)
+        return -1;
+    }
+
     // Controllo lunghezza nome
     int fNameLen = strlen(pathname);
     if (fNameLen > MAX_NAME_LEN) {
         errno = ENAMETOOLONG;
+        PROP(ULC,pathname,-1,0)
         return -1;
     }
 
@@ -690,6 +703,9 @@ int unlockFile(const char* pathname){
 }
 
 int removeFile (const char* pathname){
+
+    // Controllo se posso operare sul file
+    if (checkOpen(pathname)==-1) return -1;
 
     // Controllo lunghezza nome
     int fNameLen = strlen(pathname);
@@ -834,6 +850,10 @@ void printOpRes (int op, const char * fname, int res, size_t bytes) {
         printf ("Eseguita apertura del file %s con risultato %d\n",fname,res);
         break;
 
+    case OPL:
+        printf ("Eseguita open-lock del file %s con risultato %d\n",fname,res);
+        break;
+
     case PUC:
         printf ("Eseguita creazione del file %s con risultato %d\n",fname,res);
         break;
@@ -886,7 +906,6 @@ int getHeader_File (void ** content, void ** pathname, size_t * size, int op){
             nToRd-=nRead;
             totBytes +=nRead;
         }
-        //printf("Header letto: %s\n",(char *)buffRead);  //TEST
         char toTok [MAX_BUF_SIZE];
         strcpy (toTok,(char*)buffRead);
 
@@ -900,11 +919,10 @@ int getHeader_File (void ** content, void ** pathname, size_t * size, int op){
 
         // Salvo eventuale contenuto che possa essere finito nel buffer dell'header
         void * file = malloc (fileSize+EOB_SIZE);
-        void * fileStart = file;
         memset (file, 0, fileSize);
         void * freePtr = file;
         if (op!=RD || op!=EXF) nToRd = fileSize+EOB_SIZE; 
-        else nToRd=fileSize+1;
+        else nToRd=fileSize;    //+1;
 
         if ((tk=strtok(NULL,EOBUFF))!=NULL) {
             memcpy(file,tk,sizeof(char)*strlen(tk));
@@ -928,7 +946,7 @@ int getHeader_File (void ** content, void ** pathname, size_t * size, int op){
         }
         free(toFree);
         * pathname = pathName;
-        * content = fileStart;
+        * content = freePtr;
         * size = fileSize;
         return 0;
 }
@@ -950,4 +968,21 @@ int getExpelledFile () {
     free (pathname);
     free(content);
     return res;
+}
+
+int checkOpen (const char * pathname) {
+
+    //Controllo se il file è già aperto
+    int result = 0;
+    int fState = searchString(pathname,openFiles);
+    // Se non è presente tento di aprirlo
+    if (fState == -1) {
+        if (openFile(pathname, 0)==-1) result = -1;
+    }   
+    // Se è stato chiuso in precedenza non posso più operare sul file
+    if (fState == 0) {
+        errno = EPERM;
+        result = -1;
+    }
+    return result;
 }

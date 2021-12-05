@@ -172,7 +172,7 @@ void startServer () {
     int serverSFD;
     if ((serverSFD = socket(AF_UNIX, SOCK_STREAM,0))==-1)
         errEx();
-    node * socketsList = addNode(serverSFD);    //TO-DO FREE
+    node * socketsList = addNode(serverSFD);    //TODO FREE
     node * currSock = socketsList;
     struct sockaddr_un address;
     address.sun_family = AF_UNIX;
@@ -425,8 +425,8 @@ void * manageRequest() {
 
         // Disabilito cancellazione mentre servo richiesta per non lasciare garbage nell'ambiente
         if (pthread_setcancelstate(PTHREAD_CANCEL_DISABLE,NULL)!=0) pthread_exit(NULL);
-        printf("Managing %d for %d\n",code,currentRequest); //TEST
-        printf("Request %s\n",(char*)buffer);   //TEST
+        //printf("Managing %d for %d\n",code,currentRequest); //TEST
+        //printf("Request %s\n",(char*)buffer);   //TEST
 
         switch (code) {
 

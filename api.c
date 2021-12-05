@@ -59,11 +59,12 @@ int getExpelledFile ();
 int saveFile (void * buffer, const char * dirName, const char * pathname, size_t size);
 
 /* Controlla se il file pathname è aperto e disponibile per ulteriori operazioni.
-    In caso non sia aperto tenta di aprirlo.
+    In caso non sia aperto tenta di aprirlo, in stato locked se la flag O_LOCK viene specificata,
+    in stato unlocked altrimenti.
     Restituisce 0 se il file è aperto correttamente, -1 se l'operazione fallisce o
     il file era stato chiuso in precedenza.
 */
-int checkOpen (const char * pathname);
+int checkOpen (const char * pathname,int flag);
 
 /* Legge size bytes di buffer e restituisce la risposta contenutavi alla richiesta query.
 */
@@ -213,8 +214,8 @@ int openFile (const char* pathname, int flags){
 
                 //buffer da inviare a server
                 nToWrite = sizeof(char)*(strlen(PRIV_CREATE)+fNameLen);
-                buffer = malloc(nToWrite);
-                memset (buffer, 0, nToWrite);
+                buffer = malloc(nToWrite+1);
+                memset (buffer, 0, nToWrite+1);
                 toFreeWrite = buffer;
                 strcpy (buffer, PRIV_CREATE);
                 strcat (buffer,pathname);
@@ -229,16 +230,17 @@ int openFile (const char* pathname, int flags){
                     if (res==WAIT && sendAnswer(clientSFD,SUCCESS)==-1) FREE_RET
 
                     // Leggo risposta successiva
-                    memset(toFree,0,MAX_BUF_SIZE);
-                    buffRead=toFree;
+                    void * nextRead = calloc(MAX_BUF_SIZE,1);
+                    void * nrFree = nextRead;
                     size_t nToRead = MAX_BUF_SIZE;
                     ssize_t nRead = 1;
                     ssize_t totBytesRead = 0;
                     while (nToRead > 0 && nRead!=0) {
-                        if (totBytesRead!=0 && bufferCheck(buffRead)==1) break;
-                        if ((nRead = read(clientSFD,buffRead+totBytesRead,nToRead)==-1)) {
+                        if (totBytesRead!=0 && bufferCheck(nextRead)==1) break;
+                        if ((nRead = read(clientSFD,nextRead+totBytesRead,nToRead)==-1)) {
                             free(toFreeWrite);
                             free(toFree);
+                            free(nrFree);
                             PROP(PRC,pathname,-1,0)
                             return -1;
                         }
@@ -247,9 +249,8 @@ int openFile (const char* pathname, int flags){
                     }
 
                     // Rimango nel loop finchè il server deve espellere file
-                    char tok [48];
-                    strcpy(tok,buffRead);
-                    res = atoi(strtok(tok,EOBUFF));
+                    res = atoi((char*)nrFree);
+                    free(nrFree);
                 }
                 break;
             }
@@ -307,7 +308,7 @@ int readFile (const char * pathname, void ** buf, size_t* size) {
     }
 
     //Controllo se il file è aperto
-    if (checkOpen(pathname)==-1) {
+    if (checkOpen(pathname,0)==-1) {
         answer = -1;
         goto retRead;
     }
@@ -359,7 +360,7 @@ int readFile (const char * pathname, void ** buf, size_t* size) {
         if ((nRead = read(clientSFD,content+totBytes,nToRd)==-1)) {
             free (toFreeWrite);
             free (freeRes);
-            free(ptr);
+            free (ptr);
             return -1;
         }
         totBytes += nRead;
@@ -476,11 +477,11 @@ int writeFile (const char* pathname, const char* dirname){
     }
 
     // Richiesta apertura file al server
-    int res = openFile(pathname, O_LOCK);
+    int res = checkOpen(pathname, O_LOCK);
     if (res == -1) {
-        if (errno==ENOENT) { 
+        if (errno==ENOENT) {
             //Se il file non è già presente, lo creo
-            if ((res = openFile(pathname, O_CREATE | O_LOCK))==-1) {
+            if ((res = openFile(pathname, O_CREATE | O_LOCK))==-1) {    // BUG
                 fclose(fToWrite);
                 PROP(WR,pathname,-1,0)
                 return -1;
@@ -622,7 +623,7 @@ int appendToFile (const char* pathname, void* buf, size_t size, const char* dirn
 int lockFile(const char* pathname){
 
     // Controllo se posso operare sul file
-    if (checkOpen(pathname)==-1) return -1;
+    if (checkOpen(pathname,0)==-1) return -1;
 
     // Controllo lunghezza nome
     int fNameLen = strlen(pathname);
@@ -663,7 +664,7 @@ int lockFile(const char* pathname){
 int unlockFile(const char* pathname){
 
     // Controllo se posso operare sul file
-    if (checkOpen(pathname)==-1) {
+    if (checkOpen(pathname,0)==-1) {
         PROP(ULC,pathname,-1,0)
         return -1;
     }
@@ -705,7 +706,7 @@ int unlockFile(const char* pathname){
 int removeFile (const char* pathname){
 
     // Controllo se posso operare sul file
-    if (checkOpen(pathname)==-1) return -1;
+    if (checkOpen(pathname,0)==-1) return -1;
 
     // Controllo lunghezza nome
     int fNameLen = strlen(pathname);
@@ -970,14 +971,15 @@ int getExpelledFile () {
     return res;
 }
 
-int checkOpen (const char * pathname) {
+int checkOpen (const char * pathname, int flag) {
 
     //Controllo se il file è già aperto
     int result = 0;
     int fState = searchString(pathname,openFiles);
     // Se non è presente tento di aprirlo
     if (fState == -1) {
-        if (openFile(pathname, 0)==-1) result = -1;
+        if (flag==0 && openFile(pathname, 0)==-1) result=-1;
+        if (flag==O_LOCK && openFile(pathname, O_LOCK)==-1) result=-1;
     }   
     // Se è stato chiuso in precedenza non posso più operare sul file
     if (fState == 0) {

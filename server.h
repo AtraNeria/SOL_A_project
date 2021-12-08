@@ -28,6 +28,6 @@ void * manageRequest();
         con esito res e su file file.
         Se l'operazione non concerne file come parametro file si passa NULL.
     */
-void logOperation (int op, int process, int res, char * file);
+void logOperation (int op, int process, int res, long bytes, char * file);
 
 #endif

@@ -18,7 +18,7 @@ int bufferCheck(void * buffer){
     }
 }
 
-int nameFromPath (char * fullpath, char * name) {
+int nameFromPath (const char * fullpath, char * name) {
     char * dirless;
     char * ptr=NULL;
     char * tmp;

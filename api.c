@@ -858,6 +858,10 @@ void printOpRes (int op, const char * fname, int res, size_t bytes) {
     case PUC:
         printf ("Eseguita creazione del file %s con risultato %d\n",fname,res);
         break;
+    
+    case PRC:
+        printf ("Eseguita creazione locked del file %s con risultato %d\n",fname,res);
+        break;
 
     case CF:
         printf ("Eseguita chiusura del file %s con risultato %d\n",fname,res);

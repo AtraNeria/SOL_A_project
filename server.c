@@ -79,14 +79,13 @@ pthread_mutex_t queueAccess=PTHREAD_MUTEX_INITIALIZER;
 
 pthread_cond_t newReq = PTHREAD_COND_INITIALIZER;
 pthread_cond_t fileUnlocked = PTHREAD_COND_INITIALIZER;
-pthread_cond_t toListenFree = PTHREAD_COND_INITIALIZER;
-int toListen = -1;
 
 int fileCount = 0;
 ssize_t usedBytes = 0;
 fileNode * storage=NULL;
 fileNode * lastAddedFile=NULL;
 
+node * FDsToListen = NULL;
 
 // Macro per le operazioni standard di fine richiesta; la seconda esclude l'invio di una risposta
 // END_NOLISTEN è per i casi in cui il rimettersi in ascolto per il client è già stato segnalato
@@ -228,18 +227,17 @@ void startServer () {
         }
 
         //Controllo se devo rimettermi in ascolto di fd
-        pthread_mutex_lock (&mtx);
-        if (toListen!=-1) {
-            for (int k=1;k<maxFd;k++) 
-                if (connectionFDS[k].fd == toListen) {
-                    //printf("Listen to %d\n",connectionFDS[k].fd);   //TEST
+        pthread_mutex_lock(&mtx);
+        while (FDsToListen!=NULL) {
+            for (int k=1;k<maxFd;k++) {
+                if (connectionFDS[k].fd == FDsToListen->descriptor) {
                     connectionFDS[k].events=POLLIN;
                     break;
                 }
-            toListen = -1;
+            }
+            FDsToListen = popNode(FDsToListen);
         }
         pthread_mutex_unlock(&mtx);
-        pthread_cond_signal(&toListenFree);
 
         //if client richiede connect
         if (connectionFDS[0].revents == POLLIN && !sighup) {
@@ -252,6 +250,7 @@ void startServer () {
                 currSock = currSock->next;
                 // Accept nel file di logging
                 pthread_mutex_lock(&mutex);
+                printf("  SRVR accettata connessione %d\n",currSock->descriptor);   //TEST
                 logOperation(OC, connectionFDS[j].fd, 0, 0, NULL);
                 pthread_mutex_unlock(&mutex);
             }
@@ -421,7 +420,8 @@ void * manageRequest() {
         if (tmp!=NULL) code = atoi(tmp);
 
         char * reqArg;
-        //printf("Managing %d for %d\n",code,currentRequest); //TEST
+        pid_t tid = gettid();   //TEST
+        printf("%li Managing %d for %d\n",tid,code,currentRequest); //TEST
 
         // Disabilito cancellazione mentre servo richiesta per non lasciare garbage nell'ambiente
         if (pthread_setcancelstate(PTHREAD_CANCEL_DISABLE,NULL)!=0) pthread_exit(NULL);
@@ -566,7 +566,9 @@ void * manageRequest() {
                     }
                     reqArg = fileName;
                 }
+                printf("%li finished writing     ",tid);  //TEST
                 END_REQ(WR)
+                printf("after\n");  //TEST
                 pthread_mutex_unlock(&mutex);
                 break;
             }
@@ -618,7 +620,9 @@ void * manageRequest() {
                         if (currOwner!=currentRequest) res = -1;
                     }
                 }
+                printf("%li finished open-lock     ",tid);  //TEST
                 END_REQ(OPL)
+                printf("after\n");  //TEST
                 pthread_mutex_unlock(&mutex);
                 break;
             }
@@ -816,7 +820,9 @@ void * manageRequest() {
                         res = -1;
                     }
                 }
+                printf("%li finished create-lock   ",tid);  //TEST
                 END_REQ(PRC);
+                printf("after\n");  //TEST
                 endCreateLock:
                 pthread_mutex_unlock(&mutex);
                 break;
@@ -914,6 +920,7 @@ void * manageRequest() {
     
         free (toFree);
         free (tk);
+        printf("GO NEXT %li\n",tid);    //TEST
         //Riabilito cancellazione thread
         if (pthread_setcancelstate(PTHREAD_CANCEL_ENABLE,NULL)!=0) pthread_exit(NULL);
     }
@@ -1053,13 +1060,11 @@ void * handle (){
 }
 
 void writeListenFd (int fd) {
-    
     pthread_mutex_lock(&mtx);
-    while (toListen!=-1) pthread_cond_wait(&toListenFree,&mtx);
-    toListen=fd;
-    //printf("WRITING TO LISTEN %d\n",fd);    //TEST
+    node * toListen = addNode(fd);
+    toListen->next=FDsToListen;
+    FDsToListen=toListen;
     pthread_mutex_unlock(&mtx);
-
 }
 
 int waitForAck (int fd) {

@@ -65,6 +65,12 @@ test3:
 	mv ./main.out ./client.out Test3
 	cd ./Test3; ./main.out & ./test3.sh
 
+test4:
+	make all
+	mv ./main.out ./client.out Test4
+	cd ./Test4; ./main.out & ./test4.sh
+
+
 cleantest1:
 	make cleanall
 	rm ./Test1/log.txt ./Test1/server ./Test1/client.out ./Test1/main.out
@@ -79,6 +85,11 @@ cleantest2:
 cleantest3:
 	make cleanall
 	rm ./Test3/log.txt ./Test3/server ./Test3/client.out ./Test3/main.out
+	rm ./Read/*
+
+cleantest4:
+	make cleanall
+	rm ./Test4/log.txt ./Test4/server ./Test4/client.out ./Test4/main.out
 	rm ./Read/*
 
 cleantestAll:

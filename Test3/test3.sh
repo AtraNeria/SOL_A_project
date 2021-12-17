@@ -34,7 +34,7 @@ until [ $SECONDS -eq $end ]; do
     # Se sono meno di 10 ne avvio di nuovi
     if [ $tocall -ge 1 ]; then
         for ((i=0;i<$tocall;i++)); do
-            ./client.out -p -f server -d ./Read -w ./MyDir,2 -w ./Write,2 -R1 &
+            ./client.out -p -f server -d ./Read -R5 &
         done
     fi
 done

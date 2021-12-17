@@ -54,11 +54,11 @@ int waitForAck (int fd);
 */
 int checkPrivilege (int client, fileNode * file);
 
-/* Espelle il file vittima fName.
+/* Espelle il file vittima fName per il thread tid.
     file viene inviato al client fd che ha causato l'espulsione del file, in caso questo abbia i permessi per riceverlo.
     Restituisce 0 in caso successo, -1 altrimenti
 */
-int expelFile (int fd, fileNode * file);
+int expelFile (int fd, fileNode * file, pid_t tid);
 
 // Flags settate dalla gestione dei segnali
 volatile sig_atomic_t sigiq;
@@ -79,6 +79,7 @@ pthread_mutex_t queueAccess=PTHREAD_MUTEX_INITIALIZER;
 
 pthread_cond_t newReq = PTHREAD_COND_INITIALIZER;
 pthread_cond_t fileUnlocked = PTHREAD_COND_INITIALIZER;
+pthread_cond_t sigReqOver = PTHREAD_COND_INITIALIZER;
 
 int fileCount = 0;
 ssize_t usedBytes = 0;
@@ -89,9 +90,9 @@ node * FDsToListen = NULL;
 
 // Macro per le operazioni standard di fine richiesta; la seconda esclude l'invio di una risposta
 // END_NOLISTEN è per i casi in cui il rimettersi in ascolto per il client è già stato segnalato
-#define END_REQ(OP) logOperation(OP, currentRequest, res, bytes, reqArg);writeListenFd(currentRequest);sendAnswer(currentRequest, res);
-#define END_NOANSW(OP) logOperation(OP, currentRequest, res, bytes, reqArg);writeListenFd(currentRequest);
-#define END_NOLISTEN(OP) logOperation(OP, currentRequest, res, bytes, reqArg);sendAnswer(currentRequest, res);
+#define END_REQ(OP) logOperation(OP, currentRequest, res, bytes, reqArg, tid);writeListenFd(currentRequest);sendAnswer(currentRequest, res);
+#define END_NOANSW(OP) logOperation(OP, currentRequest, res, bytes, reqArg, tid);writeListenFd(currentRequest);
+#define END_NOLISTEN(OP) logOperation(OP, currentRequest, res, bytes, reqArg, tid);sendAnswer(currentRequest, res);
 
 
 void errEx () {
@@ -138,22 +139,26 @@ void init (int index, char * string) {
 }
 
 void readConfig () {
+    // Apro il file di configurazione
     FILE * conf;
-    if( (conf=fopen("config.txt","r")) == NULL) //apro file di config
+    if( (conf=fopen("config.txt","r")) == NULL)
         errEx();
     char confStr [MAX_NAME_LEN];
     char * currTok;
     char * ptr;
     int i;
 
+    // Ogni riga è associata ad un parametro
     for (i=0;i<CONF_PAR;i++){
         fgets(confStr, MAX_NAME_LEN, conf);
         currTok=strtok_r(confStr, ";", &ptr);
         init(i, currTok);
     }
-    
     if (fclose(conf)!=0) errEx();
 
+    // Registro nel file di logging la configurazione del server
+    fprintf (logging, "Config: Workers %d: Storage %d: Capacity %li: RequestQueueLen %d: MaxConnessioni %d\n",
+        threadQuantity,storageDim,capacity,queueLenght,maxClients);
 }
 
 void startServer () {
@@ -213,7 +218,10 @@ void startServer () {
         connectionFDS[i].events = POLLIN; 
     }
     int pollRes = 0;
-    //int timeout = 60*1000;      //1 min TEST
+    //Thread ID del main
+    pid_t tid = gettid();
+    //Registro tid nel file di logging
+    fprintf(logging,"TID %d\n",tid);
 
 
     while(!sigiq) {
@@ -250,8 +258,7 @@ void startServer () {
                 currSock = currSock->next;
                 // Accept nel file di logging
                 pthread_mutex_lock(&mutex);
-                printf("  SRVR accettata connessione %d\n",currSock->descriptor);   //TEST
-                logOperation(OC, connectionFDS[j].fd, 0, 0, NULL);
+                logOperation(OC, connectionFDS[j].fd, 0, 0, NULL, tid);
                 pthread_mutex_unlock(&mutex);
             }
             //se non posso stampo un avvertimento
@@ -270,8 +277,7 @@ void startServer () {
                 close(toClose);
                 deleteNode(toClose,&socketsList,&currSock);            
                 pthread_mutex_lock(&mutex);
-                logOperation(CC, toClose, 0, 0,  NULL);
-                //printf("CLOSE %d %d\n",toClose,connectionFDS[i].fd);   //TEST
+                logOperation(CC, toClose, 0, 0,  NULL, tid);
                 pthread_mutex_unlock(&mutex);
             }
 
@@ -286,7 +292,6 @@ void startServer () {
                     lastRequest->next = addNode(connectionFDS[i].fd);
                     lastRequest=lastRequest->next;
                 }
-                //printf("Add to req list with count %d: %d\n",listCount(requestsQueue),connectionFDS[i].fd);    //TEST
                 connectionFDS[i].events = 0;
                 pthread_cond_signal(&newReq);
                 pthread_mutex_unlock(&queueAccess);
@@ -297,7 +302,6 @@ void startServer () {
 
     // Se arriva segnale SIGINT o SIGQUIT chiudo immediatamente il server
     if (sigiq) {
-        printf("SIGIQ\n");  //TEST
         connectionFDS[0].fd = -1;
         cleanup(workers, signalHandler, wsFailed, socketsList);;
         free (connectionFDS);
@@ -307,7 +311,11 @@ void startServer () {
     // Se arriva SIGHUP servo le richieste che ho al momento prima di chiudere il server
     if (sighup) {
         connectionFDS[0].fd = -1;
-        cleanup(workers, signalHandler, wsFailed, socketsList);;
+        pthread_mutex_lock(&queueAccess);
+        if (requestsQueue==NULL) pthread_cond_signal(&newReq);
+        while (requestsQueue!=NULL) pthread_cond_wait(&sigReqOver,&queueAccess);
+        pthread_mutex_unlock(&queueAccess);
+        cleanup(workers, signalHandler, wsFailed, socketsList);
         free (connectionFDS);
         _exit(EXIT_SUCCESS);
     }
@@ -323,7 +331,7 @@ void cleanup(pthread_t workers[], pthread_t * sigHandler, int index, node * sock
     // Join e free dei thread lavoratori
     for (int i=0; i<index; i++) {
         pthread_cancel(workers[i]);
-        pthread_join(workers[i], NULL);
+        pthread_join(workers[i], NULL); //TEST
     }
     free(workers);
 
@@ -375,21 +383,33 @@ void * manageRequest() {
 
     //fd associato alla richiesta attuale
     int currentRequest;
+    //ID del thread
+    pid_t tid = gettid();
+    //Registro nel file di logging tid
+    fprintf(logging,"TID %d\n",tid);
 
     //Finchè accetto nuove richieste
-    while(TRUE) {
+    while(!sigiq) {
 
         pthread_mutex_lock(&queueAccess);
         // Prelevo fd da servire dalla queue
-        while (requestsQueue==NULL ) {
+        while (requestsQueue==NULL && !sighup) {
             pthread_cond_wait(&newReq,&queueAccess);
+        }
+        // Se è arrivato segnale di hunghup e la lista di richieste è vuota
+        if (sighup && requestsQueue==NULL) {
+            printf("\nThread received SIGHUP\n");   //TEST
+            //Segnalo che le richieste sono state tutte servite
+            pthread_cond_signal(&sigReqOver);
+            pthread_mutex_unlock(&queueAccess);
+            //Chiudo il thread
+            pthread_exit(NULL);
         }
         currentRequest = requestsQueue->descriptor;
         requestsQueue = popNode(requestsQueue);
         if (requestsQueue==NULL) lastRequest=NULL;
         pthread_mutex_unlock(&queueAccess);
 
-        //pthread_mutex_lock(&mutex);
         // Leggo la richiesta
         ssize_t reqRes = 1;
         size_t tr = MAX_BUF_SIZE;
@@ -402,8 +422,6 @@ void * manageRequest() {
             totBytesR+=reqRes;
             tr-=reqRes;
         }
-        //pthread_mutex_unlock(&mutex);
-        //printf("%s\n",(char*)buffer);   //TEST
 
         // Creo una copia del buffer per tokenizzare
         char * tk = calloc(MAX_BUF_SIZE, sizeof(char));
@@ -420,13 +438,9 @@ void * manageRequest() {
         if (tmp!=NULL) code = atoi(tmp);
 
         char * reqArg;
-        pid_t tid = gettid();   //TEST
-        printf("%li Managing %d for %d\n",tid,code,currentRequest); //TEST
 
         // Disabilito cancellazione mentre servo richiesta per non lasciare garbage nell'ambiente
         if (pthread_setcancelstate(PTHREAD_CANCEL_DISABLE,NULL)!=0) pthread_exit(NULL);
-        //printf("Managing %d for %d\n",code,currentRequest); //TEST
-        //printf("Request %s\n",(char*)buffer);   //TEST
 
         switch (code) {
 
@@ -508,7 +522,7 @@ void * manageRequest() {
                         else {
                             // Se posso scrivere controllo di avere spazio disponibile; in caso procedo all'espulsione di file vittima
                             while (usedBytes+fSize > capacity) {
-                                if (expelFile(currentRequest,storage)==-1) {
+                                if (expelFile(currentRequest,storage,tid)==-1) {
                                     END_NOLISTEN(WR)
                                     res = -1;
                                     break;
@@ -566,9 +580,7 @@ void * manageRequest() {
                     }
                     reqArg = fileName;
                 }
-                printf("%li finished writing     ",tid);  //TEST
                 END_REQ(WR)
-                printf("after\n");  //TEST
                 pthread_mutex_unlock(&mutex);
                 break;
             }
@@ -620,9 +632,7 @@ void * manageRequest() {
                         if (currOwner!=currentRequest) res = -1;
                     }
                 }
-                printf("%li finished open-lock     ",tid);  //TEST
                 END_REQ(OPL)
-                printf("after\n");  //TEST
                 pthread_mutex_unlock(&mutex);
                 break;
             }
@@ -643,6 +653,7 @@ void * manageRequest() {
                         // Se il file non è in stato locked o locked dal processo richiedente lo posso eliminare
                         if(fToRm->owner==0 || fToRm->owner==currentRequest) {
                             usedBytes-= fToRm->fileSize;
+                            bytes=fToRm->fileSize;
                             deleteFile (fToRm, &storage, &lastAddedFile);
                             fileCount--;
                         }
@@ -660,7 +671,6 @@ void * manageRequest() {
             // Creazione di un nuovo file vuoto //
             case PUC: {
                 pthread_mutex_lock(&mutex);
-                //printf ("Capacity: %d/%d\n",fileCount,storageDim);  //TEST
                 int res = 0;
                 long bytes = 0;
                 // Ricavo nome file
@@ -674,7 +684,7 @@ void * manageRequest() {
 
                 // Se sono a capacità massima avverto il client dell'espulsione di un file e aspetto feedback
                 while (fileCount >= storageDim) {
-                    if (expelFile(currentRequest,storage)==-1) {
+                    if (expelFile(currentRequest,storage,tid)==-1) {
                         res = -1;
                         END_NOLISTEN(PUC)
                         goto endCreate;
@@ -693,7 +703,6 @@ void * manageRequest() {
                         lastAddedFile->next = newFile (NULL, 0, reqArg, 0, &lastAddedFile);
                         lastAddedFile = lastAddedFile->next;
                         fileCount++;
-                        //printf("Last file: %s\n",lastAddedFile->fileName);  //TEST
                     }
                     else {
                         res = -1;
@@ -781,7 +790,6 @@ void * manageRequest() {
             // Creazione di un file locked //
             case PRC: {
                 pthread_mutex_lock(&mutex);
-                //printf ("Capacity: %d/%d\n",fileCount,storageDim);  //TEST
                 int res = 0;
                 long bytes = 0;
                 // Ricavo nome file
@@ -795,7 +803,7 @@ void * manageRequest() {
 
                 // Se sono a capacità massima avverto il client dell'espulsione di un file e aspetto feedback
                 while (fileCount >= storageDim) {
-                    if (expelFile(currentRequest,storage)==-1) {
+                    if (expelFile(currentRequest,storage,tid)==-1) {
                         res = -1;
                         END_NOLISTEN(PRC)
                         goto endCreateLock;
@@ -814,15 +822,12 @@ void * manageRequest() {
                         lastAddedFile->next = newFile (NULL, 0, reqArg, currentRequest, &lastAddedFile);
                         lastAddedFile = lastAddedFile->next;
                         fileCount++;
-                        //printf("Last file: %s\n",lastAddedFile->fileName);  //TEST
                     }
                     else {
                         res = -1;
                     }
                 }
-                printf("%li finished create-lock   ",tid);  //TEST
                 END_REQ(PRC);
-                printf("after\n");  //TEST
                 endCreateLock:
                 pthread_mutex_unlock(&mutex);
                 break;
@@ -914,16 +919,15 @@ void * manageRequest() {
             }
 
             default:
-                TEST
                 break;
         }
     
         free (toFree);
         free (tk);
-        printf("GO NEXT %li\n",tid);    //TEST
         //Riabilito cancellazione thread
         if (pthread_setcancelstate(PTHREAD_CANCEL_ENABLE,NULL)!=0) pthread_exit(NULL);
     }
+    if (sigiq) pthread_exit(NULL);
     return NULL;
 }
 
@@ -961,61 +965,61 @@ int sendFile (int fd, fileNode * f, int op) {
     return 0; 
 }
 
-void logOperation (int op, int process, int res, long bytes, char * file) {
+void logOperation (int op, int process, int res, long bytes, char * file, pid_t tid) {
 
     if (logging!=NULL) {
         switch (op)
             {
             case RD:
-                fprintf (logging,"Read:%s:%li:%d;%d\n",file,bytes,process,res);
+                fprintf (logging,"Read %s: Bytes %li: Process %d: Res %d: Tid %d\n",file,bytes,process,res,tid);
                 break;
 
             case RDM:
-                fprintf (logging, "Multiple read for process %d\n",process);
+                fprintf (logging, "Multiple read for process %d: Tid %d\n",process,tid);
                 break;
             
             case WR:
-                fprintf (logging,"Write:%s:%li:%d:%d\n",file, bytes, process,res);
+                fprintf (logging,"Write %s: Bytes %li: Process %d: Res %d: Tid %d\n",file,bytes,process,res,tid);
                 break;
 
             case OP:
-                fprintf (logging,"Open:%s:%d:%d\n",file,process,res);
+                fprintf (logging,"Open %s: Process %d: Res %d: Tid %d\n",file,process,res,tid);
                 break;
 
             case OPL:
-                fprintf (logging,"Open-lock:%s:%d:%d\n",file,process,res);
+                fprintf (logging,"Open-lock %s: Process %d: Res %d: Tid %d\n",file,process,res,tid);
                 break;
 
             case RM:
-                fprintf (logging,"Remove:%s:%d:%d\n",file,process,res);
+                fprintf (logging,"Remove %s: Bytes %li: Process %d: Res %d: Tid %d\n",file,bytes,process,res,tid);
                 break;
             
             case EXF:
-                fprintf (logging,"Expel:%s:%li:%d:%d\n",file,bytes,process,res);
+                fprintf (logging,"Expel %s: Bytes %li: Process %d: Res %d: Tid %d\n",file,bytes,process,res,tid);
                 break;
 
             case PUC:
-                fprintf (logging,"Create unlocked:%s:%d:%d\n",file,process,res);
+                fprintf (logging,"Create-unlocked %s: Process %d: Res %d: Tid %d\n",file,process,res,tid);
                 break;
             
             case PRC:
-                fprintf (logging,"Create locked:%s:%d:%d\n",file,process,res);
+                fprintf (logging,"Create-locked %s: Process %d: Res %d: Tid %d\n",file,process,res,tid);
                 break;
 
             case LCK:
-                fprintf (logging,"Lock:%s:%d:%d\n",file,process,res);
+                fprintf (logging,"Lock %s: Process %d: Res %d: Tid %d\n",file,process,res,tid);
                 break;
 
             case ULC:
-                fprintf (logging,"Unlock:%s:%d:%d\n",file,process,res);
+                fprintf (logging,"Unlock %s: Process %d: Res %d: Tid %d\n",file,process,res,tid);
                 break;
 
             case CC:
-                fprintf (logging,"Closed connection with fd %d\n",process);
+                fprintf (logging,"Closed connection with fd %d: Tid %d\n",process,tid);
                 break;
 
             case OC:
-                fprintf (logging,"Accepted connection from fd %d\n",process);
+                fprintf (logging,"Accepted connection from fd %d: Tid %d\n",process,tid);
                 break;
 
             default:
@@ -1093,7 +1097,6 @@ int sendHeader (int fd, char * pathname, ssize_t size) {
     int headerLen = strlen(pathname)+strlen(",£")+strlen(s);
     char msg[headerLen+1];
     sprintf (msg, "%s,%li£", pathname, size);
-    //printf("Header: %s %li\n",msg,sizeof(char)*strlen(msg));  //TEST
 
     int res = 0;
     ssize_t nToWrite = sizeof(char) * strlen (msg);
@@ -1115,13 +1118,13 @@ int checkPrivilege (int client, fileNode * file) {
     else return -1;
 }
 
-int expelFile (int fd, fileNode * file) {
+int expelFile (int fd, fileNode * file, pid_t tid) {
 
     // Controllo se il client attuale ha i permessi per ricevere il file da espellere
     if (checkPrivilege(fd,storage)==-1) {
         // Se fallisco a comunicare al client di attendere l'eliminazione
         if (sendAnswer(fd,WAIT)==-1 || waitForAck(fd)==-1) {
-            logOperation(EXF, fd, FAILURE, 0, file->fileName);
+            logOperation(EXF, fd, FAILURE, 0, file->fileName,tid);
             writeListenFd (fd);
             return -1;
         }
@@ -1131,21 +1134,21 @@ int expelFile (int fd, fileNode * file) {
     
     // Se sono a capacità massima avverto il client dell'espulsione di un file e aspetto feedback
     if (sendAnswer(fd,EXPEL)==-1 || waitForAck(fd)==-1) {
-        logOperation(EXF, fd, FAILURE, 0, file->fileName);
+        logOperation(EXF, fd, FAILURE, 0, file->fileName,tid);
         writeListenFd (fd);
         return -1;
     }
 
     // Invio nome e taglia del file da espellere e a seguire il contenuto
     if (sendHeader(fd,file->fileName,file->fileSize) == -1 || sendFile(fd,storage,EXF)==-1) {
-        logOperation(EXF, fd, FAILURE, 0, file->fileName);
+        logOperation(EXF, fd, FAILURE, 0, file->fileName,tid);
         writeListenFd (fd);
         return -1;
     }
 
     // Elimino il file dallo storage
     elim:
-    logOperation(EXF,fd,SUCCESS, file->fileSize, file->fileName);
+    logOperation(EXF,fd,SUCCESS, file->fileSize, file->fileName,tid);
     usedBytes-= file->fileSize;
     storage=popFile(storage);
     fileCount--;

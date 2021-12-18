@@ -63,6 +63,7 @@ int expelFile (int fd, fileNode * file, pid_t tid);
 // Flags settate dalla gestione dei segnali
 volatile sig_atomic_t sigiq;
 volatile sig_atomic_t sighup;
+int sigThreads;
 
 int threadQuantity;
 int storageDim;
@@ -79,7 +80,6 @@ pthread_mutex_t queueAccess=PTHREAD_MUTEX_INITIALIZER;
 
 pthread_cond_t newReq = PTHREAD_COND_INITIALIZER;
 pthread_cond_t fileUnlocked = PTHREAD_COND_INITIALIZER;
-pthread_cond_t sigReqOver = PTHREAD_COND_INITIALIZER;
 
 int fileCount = 0;
 ssize_t usedBytes = 0;
@@ -171,6 +171,7 @@ void startServer () {
     // Inizializzo le flag dei segnali
     sigiq = 0;
     sighup = 0;
+    sigThreads = 0;
 
     // Apro la socket del server
     int serverSFD;
@@ -297,41 +298,32 @@ void startServer () {
                 pthread_mutex_unlock(&queueAccess);
             }
         }
+        // Se è arrivato sighup e tutte le connessioni sono chiuse posso procedere alla chiusura del server
         if (sighup && closedConn==maxFd) break;
     }
 
-    // Se arriva segnale SIGINT o SIGQUIT chiudo immediatamente il server
-    if (sigiq) {
-        connectionFDS[0].fd = -1;
-        cleanup(workers, signalHandler, wsFailed, socketsList);;
-        free (connectionFDS);
-        _exit(EXIT_SUCCESS);
-    }
-
-    // Se arriva SIGHUP servo le richieste che ho al momento prima di chiudere il server
-    if (sighup) {
-        connectionFDS[0].fd = -1;
-        pthread_mutex_lock(&queueAccess);
-        if (requestsQueue==NULL) pthread_cond_signal(&newReq);
-        while (requestsQueue!=NULL) pthread_cond_wait(&sigReqOver,&queueAccess);
-        pthread_mutex_unlock(&queueAccess);
-        cleanup(workers, signalHandler, wsFailed, socketsList);
-        free (connectionFDS);
-        _exit(EXIT_SUCCESS);
-    }
+    // Setto sigThreads per segnalare ai thread di poter fare exit
+    pthread_mutex_lock(&queueAccess);
+    sigThreads = 1;
+    // Sveglio eventuali thread in attesa
+    pthread_cond_broadcast(&newReq);
+    pthread_mutex_unlock(&queueAccess);
+    // Pulisco l'ambiente
+    cleanup(workers, signalHandler, threadQuantity, socketsList);
+    free (connectionFDS);
+    _exit(EXIT_SUCCESS);
 }
 
 void cleanup(pthread_t workers[], pthread_t * sigHandler, int index, node * socket_list) {
 
     // Chiusura del file di logging delle operazioni
-    printf("Cleanup code"); //TEST
     fflush(logging);
     fclose(logging);
 
     // Join e free dei thread lavoratori
     for (int i=0; i<index; i++) {
         pthread_cancel(workers[i]);
-        pthread_join(workers[i], NULL); //TEST
+        pthread_join(workers[i], NULL);
     }
     free(workers);
 
@@ -389,22 +381,14 @@ void * manageRequest() {
     fprintf(logging,"TID %d\n",tid);
 
     //Finchè accetto nuove richieste
-    while(!sigiq) {
+    while(TRUE) {
 
         pthread_mutex_lock(&queueAccess);
         // Prelevo fd da servire dalla queue
-        while (requestsQueue==NULL && !sighup) {
+        while (requestsQueue==NULL && !sigThreads) {
             pthread_cond_wait(&newReq,&queueAccess);
         }
-        // Se è arrivato segnale di hunghup e la lista di richieste è vuota
-        if (sighup && requestsQueue==NULL) {
-            printf("\nThread received SIGHUP\n");   //TEST
-            //Segnalo che le richieste sono state tutte servite
-            pthread_cond_signal(&sigReqOver);
-            pthread_mutex_unlock(&queueAccess);
-            //Chiudo il thread
-            pthread_exit(NULL);
-        }
+        if (requestsQueue==NULL && sigThreads) pthread_exit(NULL);
         currentRequest = requestsQueue->descriptor;
         requestsQueue = popNode(requestsQueue);
         if (requestsQueue==NULL) lastRequest=NULL;
@@ -927,7 +911,6 @@ void * manageRequest() {
         //Riabilito cancellazione thread
         if (pthread_setcancelstate(PTHREAD_CANCEL_ENABLE,NULL)!=0) pthread_exit(NULL);
     }
-    if (sigiq) pthread_exit(NULL);
     return NULL;
 }
 

@@ -71,7 +71,7 @@ int checkOpen (const char * pathname,int flag);
 ssize_t getAnswer(void ** buffer, size_t size, int query);
 
 
-int openConnection (const char* sockname, int msec, const struct timespec abstime) {     //see timespec_get (da settare nel client prima della chiamata)
+int openConnection (const char* sockname, int msec, const struct timespec abstime) {
     long int total_t=0;                     //tempo totale passato da confrontare con il tempo limite
 
     int result;                             //risultato della connessione
@@ -105,28 +105,6 @@ int openConnection (const char* sockname, int msec, const struct timespec abstim
 }
 
 int closeConnection (const char* sockname) {
-
-    /*int res;
-    // Richiesta al server
-    char * closeReq = calloc(MAX_BUF_SIZE,sizeof(char));
-    strcpy(closeReq, CLOSE_S);
-
-    size_t writeSize = sizeof(char)*strlen(closeReq)+1;
-    void * buffer = malloc (writeSize);
-    memset (buffer, 0, writeSize);
-    void * toFreeWrite = buffer;
-    strcpy (buffer,closeReq);
-    void * buffRead = malloc(MAX_BUF_SIZE);
-    memset (buffRead, 0, MAX_BUF_SIZE);
-    void * toFree = buffRead;
-
-    // Invio richiesta e chiusura locale
-    int sr = writeAndRead(buffer,&buffRead,writeSize-1,MAX_BUF_SIZE);
-    res = (sr && close(clientSFD));
-    free (toFreeWrite);
-    free (closeReq);
-    free (toFree);
-    return res;*/
     return close(clientSFD);
 }
 
@@ -414,7 +392,6 @@ int readNFiles (int N, const char* dirname) {
         return -1;
     }
     N = getAnswer(&buff,MAX_BUF_SIZE,RDM);
-    //printf("Available files: %d\n",N);  //TEST
     free (tmp);
     free(toFreeWrite);
 
@@ -767,7 +744,6 @@ ssize_t writeAndRead (void * bufferToWrite, void ** bufferToRead, size_t bufferS
     size_t nToWrite = bufferSize;
     ssize_t nWritten = 1;
     size_t totBytesWritten = 0;
-    //printf("%s\n",(char*)bufferToWrite);  //TEST
     while ( nToWrite > 0 && nWritten!=0) {
         if ((nWritten = write(clientSFD, bufferToWrite, nToWrite))==-1) return -1;
             bufferToWrite+=nWritten;

@@ -230,11 +230,7 @@ void startServer () {
         //Controllo se ci sono richieste
         if ((pollRes = poll(connectionFDS,maxFd,30))==-1)
             errEx();
-        //Se è scaduto il timeout senza nessun client connesso al momento
-        if (pollRes == 0) {
-            //printf("Server refresh\n");   //TEST
-        }
-
+        
         //Controllo se devo rimettermi in ascolto di fd
         pthread_mutex_lock(&mtx);
         while (FDsToListen!=NULL) {
@@ -388,7 +384,7 @@ void * manageRequest() {
         while (requestsQueue==NULL && !sigThreads) {
             pthread_cond_wait(&newReq,&queueAccess);
         }
-        if (requestsQueue==NULL && sigThreads) pthread_exit(NULL);
+        if (sigThreads) pthread_exit(NULL);
         currentRequest = requestsQueue->descriptor;
         requestsQueue = popNode(requestsQueue);
         if (requestsQueue==NULL) lastRequest=NULL;

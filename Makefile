@@ -3,7 +3,7 @@ FLAGS = -Wall -g
 OBJECTS = api.o client.o server.o main.o list.o protocol.o commProtocol.o
 TARGETS = main.out client.out
 
-.PHONY: all clean cleanall test1 cleantest
+.PHONY: all clean cleanall test1 test2 test3 cleantest1 cleantest2 cleantest3 cleantestAll
 
 
 protocol.o: protocol.c commProtocol.h
@@ -38,6 +38,9 @@ client.out: api.o client.o list.o protocol.o
 	$(CC) $(FLAGS) $^ -o $@
 
 
+
+
+
 all: $(TARGETS)
 
 
@@ -65,12 +68,6 @@ test3:
 	mv ./main.out ./client.out Test3
 	cd ./Test3; ./main.out & ./test3.sh
 
-test4:
-	make all
-	mv ./main.out ./client.out Test4
-	cd ./Test4; ./main.out & ./test4.sh
-
-
 cleantest1:
 	make cleanall
 	rm -f ./Test1/log.txt ./Test1/server ./Test1/client.out ./Test1/main.out
@@ -85,11 +82,6 @@ cleantest2:
 cleantest3:
 	make cleanall
 	rm -f ./Test3/log.txt ./Test3/server ./Test3/client.out ./Test3/main.out
-	rm -f ./Read/*
-
-cleantest4:
-	make cleanall
-	rm -f ./Test4/log.txt ./Test4/server ./Test4/client.out ./Test4/main.out
 	rm -f ./Read/*
 
 cleantestAll:

@@ -144,7 +144,7 @@ int openFile (const char* pathname, int flags){
                 while (res==EXPEL || res==WAIT) {
 
                     //Se devo ricevere file espulso
-                    if (res==EXPEL && getExpelledFile()==-1) FREE_RET
+                    if (res==EXPEL && (getExpelledFile()==-1 || sendAnswer(clientSFD, SUCCESS)==-1)) FREE_RET
                     //Se non ho i permessi per riceverlo
                     if (res==WAIT && sendAnswer(clientSFD,SUCCESS)==-1) FREE_RET
 
@@ -167,9 +167,8 @@ int openFile (const char* pathname, int flags){
                     }
 
                     // Rimango nel loop finchè il server deve espellere file
-                    char tok [48];
-                    strcpy(tok,buffRead);
-                    res = atoi(strtok(tok,EOBUFF));
+                    char * tk = strtok((char*)buffRead,EOBUFF);
+                    res = atoi(tk);
                 }
                 break;
             }
@@ -190,35 +189,38 @@ int openFile (const char* pathname, int flags){
             // creo un file locked
             case (O_CREATE|O_LOCK):{
 
-                //buffer da inviare a server
-                nToWrite = sizeof(char)*(strlen(PRIV_CREATE)+fNameLen);
-                buffer = malloc(nToWrite+1);
-                memset (buffer, 0, nToWrite+1);
+                nToWrite = sizeof(char)*(strlen(PRIV_CREATE)+fNameLen) + 1;  //buffer da inviare a server
+                buffer = malloc(nToWrite);
+                memset (buffer, 0, nToWrite);
                 toFreeWrite = buffer;
                 strcpy (buffer, PRIV_CREATE);
                 strcat (buffer,pathname);
-                if (writeAndRead(buffer,&buffRead, nToWrite, MAX_BUF_SIZE)==-1) FREE_RET;
+
+                if (writeAndRead(buffer, &buffRead, nToWrite-1, MAX_BUF_SIZE)==-1) FREE_RET;
                 res = getAnswer(&buffRead,MAX_BUF_SIZE,PRC);
 
+                // Se il server ha necessità di espellere file prima di crearne uno
                 while (res==EXPEL || res==WAIT) {
 
                     //Se devo ricevere file espulso
-                    if (res==EXPEL && getExpelledFile()==-1) FREE_RET
+                    if (res==EXPEL && (getExpelledFile()==-1 || sendAnswer(clientSFD, SUCCESS)==-1)) FREE_RET
+
                     //Se non ho i permessi per riceverlo
                     if (res==WAIT && sendAnswer(clientSFD,SUCCESS)==-1) FREE_RET
 
                     // Leggo risposta successiva
-                    void * nextRead = calloc(MAX_BUF_SIZE,1);
-                    void * nrFree = nextRead;
+                    free(toFree);
+                    buffRead = malloc(MAX_BUF_SIZE);
+                    toFree = buffRead;
+                    memset(toFree,0,MAX_BUF_SIZE);
                     size_t nToRead = MAX_BUF_SIZE;
                     ssize_t nRead = 1;
                     ssize_t totBytesRead = 0;
                     while (nToRead > 0 && nRead!=0) {
-                        if (totBytesRead!=0 && bufferCheck(nextRead)==1) break;
-                        if ((nRead = read(clientSFD,nextRead+totBytesRead,nToRead)==-1)) {
+                        if (totBytesRead!=0 && bufferCheck(buffRead)==1) break;
+                        if ((nRead = read(clientSFD,buffRead+totBytesRead,nToRead)==-1)) {
                             free(toFreeWrite);
                             free(toFree);
-                            free(nrFree);
                             PROP(PRC,pathname,-1,0)
                             return -1;
                         }
@@ -227,8 +229,8 @@ int openFile (const char* pathname, int flags){
                     }
 
                     // Rimango nel loop finchè il server deve espellere file
-                    res = atoi((char*)nrFree);
-                    free(nrFree);
+                    char * tk = strtok((char*)buffRead,EOBUFF);
+                    res = atoi(tk);
                 }
                 break;
             }
@@ -550,7 +552,7 @@ int appendToFile (const char* pathname, void* buf, size_t size, const char* dirn
     while (res==EXPEL || res==WAIT) {
         // Leggo file espulso
         if (res==EXPEL){
-            if (getExpelledFile() == -1) {
+            if (getExpelledFile() == -1 || sendAnswer(clientSFD,SUCCESS)==-1) {    //FIX ?
                 free(toFree);
                 return -1;
             }
@@ -813,6 +815,7 @@ ssize_t getAnswer(void ** buffer, size_t size, int query) {
 }
 
 void printOpRes (int op, const char * fname, int res, size_t bytes) {
+    fflush(stdout);
     switch (op)
     {
     case RD:

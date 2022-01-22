@@ -3,6 +3,8 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/eventfd.h>
+#include <sys/types.h>
+#include <sys/syscall.h>
 #include <stdlib.h>
 #include <netinet/in.h>
 #include <string.h>
@@ -49,6 +51,11 @@ int sendHeader (int fd, char * pathname, ssize_t size);
 */
 int waitForAck (int fd);
 
+/* Funzione usata dai workers per segnalare al thread master
+    di mettersi in ascolto del client fd
+*/
+void writeListenFd (int fd);
+
 /* Controlla se client ha i permessi per accedere a file.
     Restituisce 0 se li ha, -1 altrimenti
 */
@@ -59,6 +66,7 @@ int checkPrivilege (int client, fileNode * file);
     Restituisce 0 in caso successo, -1 altrimenti
 */
 int expelFile (int fd, fileNode * file, pid_t tid);
+
 
 // Flags settate dalla gestione dei segnali
 volatile sig_atomic_t sigiq;
@@ -220,7 +228,7 @@ void startServer () {
     }
     int pollRes = 0;
     //Thread ID del main
-    pid_t tid = gettid();
+    pid_t tid = syscall(__NR_gettid);
     //Registro tid nel file di logging
     fprintf(logging,"TID %d\n",tid);
 
@@ -372,7 +380,7 @@ void * manageRequest() {
     //fd associato alla richiesta attuale
     int currentRequest;
     //ID del thread
-    pid_t tid = gettid();
+    pid_t tid = syscall(__NR_gettid);
     //Registro nel file di logging tid
     fprintf(logging,"TID %d\n",tid);
 
@@ -939,7 +947,7 @@ int sendFile (int fd, fileNode * f, int op) {
         writeSize -= nWritten;
         totBytesWritten += nWritten;
     }
-    if (op!=RD && op!=EXF) {write(fd, EOBUFF, EOB_SIZE);}
+    if (op!=RD) {write(fd, EOBUFF, EOB_SIZE);}
     free (toFree);
     return 0; 
 }
@@ -1119,7 +1127,7 @@ int expelFile (int fd, fileNode * file, pid_t tid) {
     }
 
     // Invio nome e taglia del file da espellere e a seguire il contenuto
-    if (sendHeader(fd,file->fileName,file->fileSize) == -1 || sendFile(fd,storage,EXF)==-1) {
+    if (sendHeader(fd,file->fileName,file->fileSize) == -1 || sendFile(fd,storage,EXF)==-1 || waitForAck(fd)==-1) {
         logOperation(EXF, fd, FAILURE, 0, file->fileName,tid);
         writeListenFd (fd);
         return -1;

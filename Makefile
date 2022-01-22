@@ -73,28 +73,28 @@ test4:
 
 cleantest1:
 	make cleanall
-	rm ./Test1/log.txt ./Test1/server ./Test1/client.out ./Test1/main.out
-	rm ./Test1/ReadFile/*
+	rm -f ./Test1/log.txt ./Test1/server ./Test1/client.out ./Test1/main.out
+	rm -f ./Test1/ReadFile/*
 
 cleantest2:
 	make cleanall
-	rm ./Test2/log.txt ./Test2/server ./Test2/client.out ./Test2/main.out
-	rm ./Test2/Expelled_2nd/*
-	rm ./Test2/Expelled/*
+	rm -f ./Test2/log.txt ./Test2/server ./Test2/client.out ./Test2/main.out
+	rm -f ./Test2/Expelled_2nd/*
+	rm -f ./Test2/Expelled/*
 
 cleantest3:
 	make cleanall
-	rm ./Test3/log.txt ./Test3/server ./Test3/client.out ./Test3/main.out
-	rm ./Read/*
+	rm -f ./Test3/log.txt ./Test3/server ./Test3/client.out ./Test3/main.out
+	rm -f ./Read/*
 
 cleantest4:
 	make cleanall
-	rm ./Test4/log.txt ./Test4/server ./Test4/client.out ./Test4/main.out
-	rm ./Read/*
+	rm -f ./Test4/log.txt ./Test4/server ./Test4/client.out ./Test4/main.out
+	rm -f ./Read/*
 
 cleantestAll:
 	make cleanall
-	rm ./Test1/log.txt ./Test1/server ./Test1/client.out ./Test1/main.out
-	rm ./Test1/ReadFile/*
-	rm ./Test2/log.txt ./Test2/server ./Test2/client.out ./Test2/main.out
-	rm ./Test2/Read/*
+	rm -f ./Test1/log.txt ./Test1/server ./Test1/client.out ./Test1/main.out
+	rm -f ./Test1/ReadFile/*
+	rm -f ./Test2/log.txt ./Test2/server ./Test2/client.out ./Test2/main.out
+	rm -f ./Test2/Read/*

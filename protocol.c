@@ -6,7 +6,7 @@
 
 int bufferCheck(void * buffer){
     char * b = malloc(sizeof(char)*MAX_FILE_SIZE);
-    //memset (b, 0, sizeof(char)*MAX_FILE_SIZE);
+    memset (b, 0, sizeof(char)*MAX_FILE_SIZE);
     strcpy (b, (char *) buffer);
 
     if (strstr(b, EOBUFF)==NULL) {

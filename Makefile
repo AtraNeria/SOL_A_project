@@ -1,5 +1,5 @@
 CC = gcc
-FLAGS = -Wall -g
+FLAGS = -std=c99 -D_GNU_SOURCE -Wall -g
 OBJECTS = api.o client.o server.o main.o list.o protocol.o commProtocol.o
 TARGETS = main.out client.out
 
